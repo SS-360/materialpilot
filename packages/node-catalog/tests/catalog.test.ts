@@ -28,4 +28,20 @@ describe("NodeCatalog", () => {
     expect(validateParameterValue(scale, 32)).toEqual([]);
     expect(validateParameterValue(scale, 512)).toContain("Must be <= 32");
   });
+
+  it("matches Material Maker 1.7 material port indices and native controls", () => {
+    const material = catalog.get("mm.output.material");
+    expect(material.inputs.map((port) => port.name)).toEqual([
+      "albedo",
+      "metallic",
+      "roughness",
+      "emission",
+      "normal",
+      "ao",
+      "depth"
+    ]);
+    expect(material.parameters.map((parameter) => parameter.name)).toEqual(
+      expect.arrayContaining(["depth_scale", "flags_transparent", "metallic", "roughness", "size"])
+    );
+  });
 });

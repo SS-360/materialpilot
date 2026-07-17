@@ -247,6 +247,35 @@ export const builtinNodeDescriptors: readonly NodeTypeDescriptor[] = [
         maximum: 10,
         step: 0.01,
         description: "Normal intensity"
+      },
+      {
+        name: "buffer",
+        label: "Buffered Output",
+        type: "integer",
+        default: 1,
+        required: false,
+        minimum: 0,
+        maximum: 1,
+        description: "Material Maker native output-buffer toggle"
+      },
+      {
+        name: "param2",
+        label: "Native Option",
+        type: "number",
+        default: 0,
+        required: false,
+        description: "Material Maker native normal-map option"
+      },
+      {
+        name: "size",
+        label: "Buffer Resolution Exponent",
+        type: "integer",
+        default: 10,
+        required: false,
+        minimum: 4,
+        maximum: 13,
+        step: 1,
+        description: "Material Maker native buffer resolution"
       }
     ],
     relativeCost: "low",
@@ -265,20 +294,6 @@ export const builtinNodeDescriptors: readonly NodeTypeDescriptor[] = [
     semanticTags: ["output", "channel_packing"],
     inputs: [
       {
-        name: "height",
-        label: "Height",
-        dataType: "grayscale",
-        required: false,
-        description: "Height channel"
-      },
-      {
-        name: "roughness",
-        label: "Roughness",
-        dataType: "grayscale",
-        required: false,
-        description: "Roughness channel"
-      },
-      {
         name: "albedo",
         label: "Albedo",
         dataType: "rgba",
@@ -291,6 +306,20 @@ export const builtinNodeDescriptors: readonly NodeTypeDescriptor[] = [
         dataType: "grayscale",
         required: false,
         description: "Metallic channel"
+      },
+      {
+        name: "roughness",
+        label: "Roughness",
+        dataType: "grayscale",
+        required: false,
+        description: "Roughness channel"
+      },
+      {
+        name: "emission",
+        label: "Emission",
+        dataType: "rgba",
+        required: false,
+        description: "Emission channel"
       },
       {
         name: "normal",
@@ -307,15 +336,79 @@ export const builtinNodeDescriptors: readonly NodeTypeDescriptor[] = [
         description: "AO channel"
       },
       {
-        name: "emission",
-        label: "Emission",
-        dataType: "rgba",
+        name: "depth",
+        label: "Depth",
+        dataType: "grayscale",
         required: false,
-        description: "Emission channel"
+        description: "Depth channel"
       }
     ],
     outputs: [],
     parameters: [
+      {
+        name: "albedo_color",
+        label: "Albedo Color",
+        type: "color",
+        default: { kind: "color", r: 1, g: 1, b: 1, a: 1 },
+        required: false,
+        description: "Albedo multiplier"
+      },
+      {
+        name: "ao",
+        label: "Ambient Occlusion",
+        type: "number",
+        default: 1,
+        required: false,
+        description: "Ambient-occlusion multiplier"
+      },
+      {
+        name: "depth_scale",
+        label: "Depth Scale",
+        type: "number",
+        default: 0.5,
+        required: false,
+        description: "Parallax/depth intensity"
+      },
+      {
+        name: "emission_energy",
+        label: "Emission Energy",
+        type: "number",
+        default: 1,
+        required: false,
+        description: "Emission intensity"
+      },
+      {
+        name: "flags_transparent",
+        label: "Transparent",
+        type: "boolean",
+        default: false,
+        required: false,
+        description: "Enable transparent material output"
+      },
+      {
+        name: "metallic",
+        label: "Metallic",
+        type: "number",
+        default: 0,
+        required: false,
+        description: "Metallic multiplier"
+      },
+      {
+        name: "normal",
+        label: "Normal Strength",
+        type: "number",
+        default: 1,
+        required: false,
+        description: "Normal-map multiplier"
+      },
+      {
+        name: "roughness",
+        label: "Roughness",
+        type: "number",
+        default: 1,
+        required: false,
+        description: "Roughness multiplier"
+      },
       {
         name: "size",
         label: "Resolution Exponent",
@@ -326,6 +419,14 @@ export const builtinNodeDescriptors: readonly NodeTypeDescriptor[] = [
         maximum: 13,
         step: 1,
         description: "Base-2 export resolution"
+      },
+      {
+        name: "sss",
+        label: "Subsurface Scattering",
+        type: "number",
+        default: 1,
+        required: false,
+        description: "Subsurface-scattering multiplier"
       }
     ],
     relativeCost: "medium",
