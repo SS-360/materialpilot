@@ -1,0 +1,41 @@
+{
+  "name": "materialpilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A safe MCP integration for Material Maker",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "build": "turbo run build",
+    "check": "turbo run typecheck lint test",
+    "clean": "turbo run clean",
+    "dev": "pnpm --filter @materialpilot/mcp-server dev",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "compatibility": "node scripts/run-compatibility-suite.mjs",
+    "lint": "turbo run lint",
+    "package": "node scripts/package-release.mjs",
+    "generate:sbom": "node scripts/generate-sbom.mjs",
+    "test": "turbo run test",
+    "test:godot": "pnpm --filter @materialpilot/material-maker-bridge test:godot",
+    "test:material-maker": "pnpm --filter @materialpilot/material-maker-bridge test:material-maker",
+    "test:coverage": "turbo run test:coverage",
+    "typecheck": "turbo run typecheck",
+    "materialpilot": "node apps/mcp-server/dist/main.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@types/node": "^24.0.15",
+    "@vitest/coverage-v8": "^4.1.0",
+    "eslint": "^9.31.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.3",
+    "turbo": "^2.5.5",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^4.1.0"
+  }
+}

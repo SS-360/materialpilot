@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible MaterialPilot defect
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions and doctor output
+      description: Redact tokens and private paths.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+    validations:
+      required: true

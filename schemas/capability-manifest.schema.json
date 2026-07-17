@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://materialpilot.dev/schemas/capability-manifest-v1.json",
+  "title": "MaterialPilot Capability Manifest",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "bridgeVersion",
+    "materialMakerVersion",
+    "godotVersion",
+    "projectTypes",
+    "features",
+    "limits"
+  ],
+  "properties": {
+    "protocolVersion": { "type": "string" },
+    "bridgeVersion": { "type": "string" },
+    "materialMakerVersion": { "type": "string" },
+    "godotVersion": { "type": "string" },
+    "projectTypes": { "type": "array", "items": { "enum": ["material", "painting"] } },
+    "features": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "limits": {
+      "type": "object",
+      "required": [
+        "maxPatchOperations",
+        "maxPayloadBytes",
+        "maxConcurrentJobs",
+        "maxPreviewResolution"
+      ],
+      "properties": {
+        "maxPatchOperations": { "type": "integer", "minimum": 1 },
+        "maxPayloadBytes": { "type": "integer", "minimum": 1 },
+        "maxConcurrentJobs": { "type": "integer", "minimum": 1 },
+        "maxPreviewResolution": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

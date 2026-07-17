@@ -1,0 +1,10 @@
+node_modules/
+.turbo/
+dist/
+coverage/
+.upstream-material-maker/
+artifacts/
+materialpilot-production-implementation-plan.md
+pnpm-lock.yaml
+*.gd
+

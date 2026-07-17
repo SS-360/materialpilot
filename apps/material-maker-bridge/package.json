@@ -1,0 +1,16 @@
+{
+  "name": "@materialpilot/material-maker-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "node scripts/validate-addon.mjs",
+    "typecheck": "node scripts/validate-addon.mjs",
+    "lint": "node scripts/validate-addon.mjs",
+    "test": "node scripts/validate-addon.mjs",
+    "test:godot": "node scripts/validate-godot.mjs",
+    "test:material-maker": "node scripts/validate-material-maker.mjs",
+    "test:coverage": "node scripts/validate-addon.mjs",
+    "clean": "node -e \"process.exit(0)\""
+  }
+}

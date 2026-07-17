@@ -1,0 +1,13 @@
+node_modules/
+.turbo/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.materialpilot/
+.upstream-material-maker/
+.tools/
+artifacts/
+*.tsbuildinfo

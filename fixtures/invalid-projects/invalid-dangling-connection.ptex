@@ -1,0 +1,12 @@
+{
+  "connections": [
+    { "from": "missing", "from_port": 0, "to": "Material", "to_port": 1 }
+  ],
+  "name": "Material",
+  "nodes": [
+    { "name": "Material", "type": "material", "node_position": { "x": 0, "y": 0 }, "parameters": { "size": 10 } }
+  ],
+  "parameters": {},
+  "type": "graph"
+}
+

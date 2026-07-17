@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://materialpilot.dev/schemas/bridge-rpc-v1.json",
+  "title": "MaterialPilot Bridge JSON-RPC Message",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["jsonrpc", "id", "method"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["string", "number"] },
+        "method": { "type": "string", "minLength": 1 },
+        "params": true
+      }
+    },
+    {
+      "type": "object",
+      "required": ["jsonrpc", "id"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["string", "number"] },
+        "result": true,
+        "error": { "type": "object" }
+      }
+    }
+  ]
+}

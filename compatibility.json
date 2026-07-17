@@ -1,0 +1,10 @@
+{
+  "materialpilot": "0.1.0",
+  "bridgeProtocol": "1.0",
+  "mcpSpecTested": "2025-11-25",
+  "materialMaker": ["1.7"],
+  "godot": ["4.7"],
+  "node": ">=22",
+  "painting": "inspection-only",
+  "customShaderWrite": false
+}

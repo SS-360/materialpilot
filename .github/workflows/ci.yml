@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+
+  godot-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download verified Godot 4.7
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/godotengine/godot/releases/download/4.7-stable/Godot_v4.7-stable_win64.exe.zip" -OutFile godot.zip
+          $hash = (Get-FileHash godot.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "02a5312236f4e0209c78bcb2f52135b1963e6b8888c873c9cee81459e60bcd71") { throw "Godot checksum mismatch" }
+          Expand-Archive godot.zip -DestinationPath godot
+          "GODOT_BIN=$((Resolve-Path 'godot/Godot_v4.7-stable_win64_console.exe').Path)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - run: pnpm test:godot

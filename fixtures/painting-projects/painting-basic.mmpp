@@ -1,0 +1,26 @@
+{
+  "model": "models/demo.obj",
+  "settings": { "texture_size": 10, "paint_engine": 0 },
+  "layers": [
+    {
+      "name": "Base paint",
+      "type": 0,
+      "index": 0,
+      "hidden": false,
+      "albedo": "albedo_0.png",
+      "mr": "mr_0.png",
+      "albedo_alpha": 0.9
+    },
+    {
+      "name": "Procedural wear",
+      "type": 1,
+      "index": 1,
+      "hidden": false,
+      "material": { "name": "Material", "type": "graph", "nodes": [], "connections": [] },
+      "layers": [
+        { "name": "Wear mask", "type": 2, "index": 2, "hidden": false, "mask": "mask_2.png" }
+      ]
+    }
+  ]
+}
+

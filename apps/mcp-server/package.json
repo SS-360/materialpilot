@@ -1,0 +1,37 @@
+{
+  "name": "@materialpilot/mcp-server",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "materialpilot-mcp": "./dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "dev": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests --max-warnings=0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@materialpilot/bridge-protocol": "workspace:*",
+    "@materialpilot/domain": "workspace:*",
+    "@materialpilot/graph-engine": "workspace:*",
+    "@materialpilot/node-catalog": "workspace:*",
+    "@materialpilot/ptex": "workspace:*",
+    "@materialpilot/security": "workspace:*",
+    "@materialpilot/validator": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3"
+  }
+}

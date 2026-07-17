@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://materialpilot.dev/schemas/graph-patch-v1.json",
+  "title": "MaterialPilot Graph Patch v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "patchVersion",
+    "projectId",
+    "expectedRevision",
+    "idempotencyKey",
+    "label",
+    "dryRun",
+    "operations",
+    "validationPolicy"
+  ],
+  "properties": {
+    "patchVersion": { "const": "1" },
+    "projectId": { "type": "string", "minLength": 1 },
+    "expectedRevision": { "type": "integer", "minimum": 0 },
+    "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 200 },
+    "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "dryRun": { "type": "boolean" },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "enum": [
+              "node.create",
+              "node.delete",
+              "node.move",
+              "node.rename",
+              "node.set_parameter",
+              "connection.create",
+              "connection.delete",
+              "selection.set"
+            ]
+          }
+        }
+      }
+    },
+    "validationPolicy": { "enum": ["none", "structural", "standard", "strict", "release"] },
+    "rollbackOnWarningCodes": { "type": "array", "items": { "type": "string" } }
+  }
+}

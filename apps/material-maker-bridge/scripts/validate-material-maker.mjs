@@ -1,0 +1,234 @@
+import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const repository = resolve(root, "../..");
+const godot = process.env.GODOT_BIN;
+const materialMaker = process.env.MATERIAL_MAKER_PROJECT;
+if (!godot || !materialMaker) {
+  throw new Error("Set GODOT_BIN and MATERIAL_MAKER_PROJECT for the native application contract.");
+}
+await access(join(materialMaker, "project.godot"));
+const { BridgeClient } = await import(
+  pathToFileURL(join(repository, "packages", "bridge-protocol", "dist", "index.js")).href
+);
+
+const runtimeDirectory = join(tmpdir(), `materialpilot-material-maker-${process.pid}`);
+const runtimeFile = join(runtimeDirectory, "bridge.json");
+await mkdir(runtimeDirectory, { recursive: true });
+const output = { value: "" };
+const child = spawn(godot, ["--headless", "--path", materialMaker, "--", "--no-splash"], {
+  env: { ...process.env, MATERIALPILOT_RUNTIME_DIR: runtimeDirectory },
+  stdio: ["ignore", "pipe", "pipe"]
+});
+child.stdout.on("data", (chunk) => (output.value += chunk.toString()));
+child.stderr.on("data", (chunk) => (output.value += chunk.toString()));
+
+const delay = (milliseconds) =>
+  new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+
+function firstDifference(left, right, path = "$") {
+  if (left === right) return null;
+  if (typeof left !== typeof right || left === null || right === null) {
+    return { path, left, right };
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return { path, left, right };
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      const difference = firstDifference(left[index], right[index], `${path}[${index}]`);
+      if (difference) return difference;
+    }
+    return null;
+  }
+  if (typeof left === "object") {
+    const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+    for (const key of keys) {
+      const difference = firstDifference(left[key], right[key], `${path}.${key}`);
+      if (difference) return difference;
+    }
+    return null;
+  }
+  return { path, left, right };
+}
+
+function semanticGraph(value) {
+  const graph = structuredClone(value);
+  delete graph.name;
+  return graph;
+}
+
+let client;
+try {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (child.exitCode !== null) {
+      throw new Error(`Material Maker exited early (${child.exitCode}):\n${output.value}`);
+    }
+    try {
+      await access(runtimeFile);
+      break;
+    } catch {
+      await delay(50);
+    }
+  }
+  await readFile(runtimeFile, "utf8");
+  ({ client } = await BridgeClient.connectFromRuntimeFile(runtimeFile));
+
+  let status;
+  for (let attempt = 0; attempt < 600; attempt += 1) {
+    status = await client.request("app.get_status");
+    if (status.connectedProjectCount > 0 && status.activeProjectId) break;
+    await delay(100);
+  }
+  if (!status?.activeProjectId) {
+    throw new Error(`Material Maker did not initialize an active project:\n${output.value}`);
+  }
+  const active = await client.request("project.get_active");
+  const snapshot = await client.request("graph.get_snapshot", { projectId: active.id });
+  if (!Array.isArray(snapshot.serializedGraph?.nodes)) {
+    throw new Error("Native graph snapshot did not include serialized nodes");
+  }
+  const probeOperations = [
+    {
+      type: "node.create",
+      tempId: "height",
+      nodeTypeId: "perlin",
+      position: { x: 0, y: 0 },
+      parameters: { scale_x: 8, scale_y: 8, iterations: 4, persistence: 0.5 }
+    },
+    {
+      type: "node.create",
+      tempId: "albedo",
+      nodeTypeId: "colorize",
+      position: { x: 260, y: -100 }
+    },
+    {
+      type: "node.create",
+      tempId: "normal",
+      nodeTypeId: "normal_map2",
+      position: { x: 260, y: 140 },
+      parameters: { strength: 1 }
+    },
+    {
+      type: "connection.create",
+      fromNodeId: "height",
+      fromPort: "output",
+      toNodeId: "albedo",
+      toPort: "input"
+    },
+    {
+      type: "connection.create",
+      fromNodeId: "height",
+      fromPort: "output",
+      toNodeId: "normal",
+      toPort: "input"
+    }
+  ];
+  const planned = await client.request("graph.apply_patch", {
+    patch: {
+      patchVersion: "1",
+      projectId: active.id,
+      expectedRevision: snapshot.revision,
+      idempotencyKey: `native-probe-${process.pid}`,
+      label: "MaterialPilot native dry-run probe",
+      dryRun: true,
+      validationPolicy: "structural",
+      operations: probeOperations
+    }
+  });
+  if (planned.status !== "planned" || planned.revision !== snapshot.revision) {
+    throw new Error("Native dry-run transaction contract failed");
+  }
+  const plannedPerlin = planned.serializedGraph.nodes.find((node) => node.type === "perlin");
+  if (
+    planned.serializedGraph.nodes.length !== snapshot.serializedGraph.nodes.length + 3 ||
+    planned.serializedGraph.connections.length !==
+      snapshot.serializedGraph.connections.length + 2 ||
+    plannedPerlin?.parameters?.scale_x !== 8 ||
+    plannedPerlin?.parameters?.scale_y !== 8
+  ) {
+    throw new Error("Native multi-node patch did not preserve nodes, connections, and parameters");
+  }
+  const after = await client.request("graph.get_snapshot", { projectId: active.id });
+  if (after.hash !== snapshot.hash || after.revision !== snapshot.revision) {
+    const difference = firstDifference(
+      semanticGraph(snapshot.serializedGraph),
+      semanticGraph(after.serializedGraph)
+    );
+    throw new Error(
+      `Native dry-run changed the active Material Maker project at ${difference?.path ?? "hash"}: ${JSON.stringify({ difference, beforeHash: snapshot.hash, afterHash: after.hash, beforeRevision: snapshot.revision, afterRevision: after.revision })}`
+    );
+  }
+
+  const committed = await client.request("graph.apply_patch", {
+    patch: {
+      patchVersion: "1",
+      projectId: active.id,
+      expectedRevision: after.revision,
+      idempotencyKey: `native-commit-${process.pid}`,
+      label: "MaterialPilot native undo/redo probe",
+      dryRun: false,
+      validationPolicy: "structural",
+      operations: probeOperations
+    }
+  });
+  if (committed.status !== "committed" || committed.revision !== after.revision + 1) {
+    throw new Error("Native committed transaction contract failed");
+  }
+
+  const undone = await client.request("graph.undo", {
+    projectId: active.id,
+    expectedRevision: committed.revision
+  });
+  const undoDifference = firstDifference(
+    semanticGraph(snapshot.serializedGraph),
+    semanticGraph(undone.serializedGraph)
+  );
+  if (undoDifference || undone.revision !== committed.revision + 1) {
+    throw new Error(`Native undo contract failed: ${JSON.stringify(undoDifference)}`);
+  }
+
+  const redone = await client.request("graph.redo", {
+    projectId: active.id,
+    expectedRevision: undone.revision
+  });
+  const redoDifference = firstDifference(
+    semanticGraph(committed.serializedGraph),
+    semanticGraph(redone.serializedGraph)
+  );
+  if (redoDifference || redone.revision !== undone.revision + 1) {
+    throw new Error(`Native redo contract failed: ${JSON.stringify(redoDifference)}`);
+  }
+
+  const restored = await client.request("graph.undo", {
+    projectId: active.id,
+    expectedRevision: redone.revision
+  });
+  const restoreDifference = firstDifference(
+    semanticGraph(snapshot.serializedGraph),
+    semanticGraph(restored.serializedGraph)
+  );
+  if (restoreDifference || restored.revision !== redone.revision + 1) {
+    throw new Error(`Native final restore contract failed: ${JSON.stringify(restoreDifference)}`);
+  }
+  process.stdout.write(
+    `Material Maker ${status.materialMakerVersion} native patch, rollback, undo, and redo contracts passed on Godot ${status.godotVersion}.\n`
+  );
+} catch (error) {
+  throw new Error(
+    `${error instanceof Error ? error.message : String(error)}\nGodot output:\n${output.value}`
+  );
+} finally {
+  client?.close();
+  if (child.exitCode === null) {
+    const exited = new Promise((resolveExit) => child.once("exit", resolveExit));
+    child.kill();
+    await Promise.race([exited, delay(3_000)]);
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
+  await rm(runtimeDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}

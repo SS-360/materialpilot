@@ -1,0 +1,29 @@
+{
+	"connections": [
+		{
+			"from": "perlin_0",
+			"from_port": 0,
+			"to": "Material",
+			"to_port": 1
+		}
+	],
+	"label": "Simple Noise",
+	"name": "Material",
+	"node_position": { "x": 0, "y": 0 },
+	"nodes": [
+		{
+			"name": "perlin_0",
+			"node_position": { "x": 100, "y": 120 },
+			"parameters": { "iterations": 5, "persistence": 0.5, "scale_x": 8, "scale_y": 8 },
+			"type": "perlin"
+		},
+		{
+			"name": "Material",
+			"node_position": { "x": 600, "y": 120 },
+			"parameters": { "size": 10 },
+			"type": "material"
+		}
+	],
+	"parameters": {},
+	"type": "graph"
+}
