@@ -47,8 +47,19 @@ export function serializePtex(project: RawPtexProject, pretty = true): string {
   return pretty ? `${JSON.stringify(parsed, null, "\t")}\n` : canonicalJson(parsed);
 }
 
-function rawToParameter(value: unknown): ParameterValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+export function rawParameterToValue(value: unknown): ParameterValue {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return rawParameterToValue(JSON.parse(trimmed));
+      } catch {
+        // Preserve ordinary strings and malformed upstream values for deterministic validation.
+      }
+    }
+    return value;
+  }
   if (typeof value === "number") {
     if (!Number.isFinite(value))
       throw new MaterialPilotError("INVALID_REQUEST", "PTEX contains a non-finite parameter.");
@@ -76,17 +87,73 @@ function rawToParameter(value: unknown): ParameterValue {
         z: Number(object.z ?? 0)
       };
     }
+    if (object.type === "Gradient" && Array.isArray(object.points)) {
+      return {
+        kind: "gradient",
+        stops: object.points.map((point) => {
+          const entry = point as Record<string, unknown>;
+          return {
+            offset: Number(entry.pos ?? 0),
+            color: {
+              kind: "color",
+              r: Number(entry.r ?? 0),
+              g: Number(entry.g ?? 0),
+              b: Number(entry.b ?? 0),
+              a: Number(entry.a ?? 1)
+            }
+          };
+        })
+      };
+    }
+    if (object.type === "Curve" && Array.isArray(object.points)) {
+      return {
+        kind: "curve",
+        points: object.points.map((point) => {
+          const entry = point as Record<string, unknown>;
+          return {
+            x: Number(entry.x ?? 0),
+            y: Number(entry.y ?? 0),
+            ...(entry.ls === undefined ? {} : { leftTangent: Number(entry.ls) }),
+            ...(entry.rs === undefined ? {} : { rightTangent: Number(entry.rs) })
+          };
+        })
+      };
+    }
   }
   return JSON.stringify(value);
 }
 
-function parameterToRaw(value: ParameterValue): unknown {
+export function parameterValueToRaw(value: ParameterValue): unknown {
   if (value === null || typeof value !== "object") return value;
   if (value.kind === "color")
     return { type: "Color", r: value.r, g: value.g, b: value.b, a: value.a };
   if (value.kind === "vector2") return { type: "Vector2", x: value.x, y: value.y };
   if (value.kind === "vector3") return { type: "Vector3", x: value.x, y: value.y, z: value.z };
-  return value;
+  if (value.kind === "gradient") {
+    return {
+      type: "Gradient",
+      interpolation: 1,
+      points: value.stops.map((stop) => ({
+        pos: stop.offset,
+        r: stop.color.r,
+        g: stop.color.g,
+        b: stop.color.b,
+        a: stop.color.a
+      }))
+    };
+  }
+  if (value.kind === "curve") {
+    return {
+      type: "Curve",
+      points: value.points.map((point) => ({
+        x: point.x,
+        y: point.y,
+        ls: point.leftTangent ?? 0,
+        rs: point.rightTangent ?? 0
+      }))
+    };
+  }
+  return value.source;
 }
 
 function makeUnknownPorts(nodeId: string, direction: Port["direction"], count: number): Port[] {
@@ -161,14 +228,17 @@ export function ptexToSnapshot(
       inputs: makePorts("input"),
       outputs: makePorts("output"),
       parameters: Object.fromEntries(
-        Object.entries(raw.parameters ?? {}).map(([name, value]) => [name, rawToParameter(value)])
+        Object.entries(raw.parameters ?? {}).map(([name, value]) => [
+          name,
+          rawParameterToValue(value)
+        ])
       ),
       metadata: { rawType: raw.type, ...(raw.nodes ? { nestedGraph: raw.nodes } : {}) }
     };
   });
   const byNativeId = new Map(nodes.map((node) => [node.nativeId, node]));
   const unresolvedReferences: string[] = [];
-  const connections = project.connections.flatMap((raw, index) => {
+  const connections = project.connections.flatMap((raw) => {
     const source = byNativeId.get(raw.from);
     const target = byNativeId.get(raw.to);
     const fromPort = source?.outputs[raw.from_port];
@@ -184,7 +254,7 @@ export function ptexToSnapshot(
         id: stableNativeId(
           "connection",
           projectId,
-          `${index}:${raw.from}:${raw.from_port}:${raw.to}:${raw.to_port}`
+          [raw.from, raw.from_port, raw.to, raw.to_port].join(":")
         ),
         fromNodeId: source.id,
         fromPortId: fromPort.id,
@@ -228,7 +298,7 @@ export function snapshotToPtex(
       type: rawType,
       node_position: structuredClone(node.position),
       parameters: Object.fromEntries(
-        Object.entries(node.parameters).map(([name, value]) => [name, parameterToRaw(value)])
+        Object.entries(node.parameters).map(([name, value]) => [name, parameterValueToRaw(value)])
       ),
       ...(node.seed === undefined ? {} : { seed_int: node.seed })
     };
