@@ -5,8 +5,8 @@ server to Codex, verifies the live connection, and creates a first procedural ma
 
 MaterialPilot 0.1.0 is an implementation preview for Material Maker 1.7 running on Godot 4.7.
 Live graph inspection, atomic graph edits, revision checks, dry runs, undo, and redo are supported.
-Native project create/open/save/close, preview capture, texture export, and painting writes are not
-yet available.
+Native project create/open/save/close, full material 2D/3D capture, texture export, and painting
+writes are not yet available. Bounded PNG rendering of individual live node outputs is available.
 
 ## How the pieces fit together
 
@@ -410,6 +410,12 @@ instead of forcing it. Do not save or export.
 These examples prove graph creation and validation, not rendered appearance. Judge the material in
 Material Maker's own 2D and 3D views, adjust parameters there or through another revision-safe MCP
 patch, and save from the Material Maker UI.
+
+For pixel evidence from a specific graph output, ask Codex to call
+`preview_render_node_output` with the project ID, stable node ID, output name or index, and a
+resolution from 16 to 1024. This returns an in-memory PNG and does not write or export a texture
+file. Full Material Maker 2D/3D panel capture and automated before/after comparison remain later
+preview-phase work.
 
 ## Run in offline reference mode
 

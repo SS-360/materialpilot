@@ -14,6 +14,7 @@ All mutating tools are annotated as writes and carry MaterialPilot safety metada
 | `graph_plan_patch`                                 | A0    | Dry-run a patch and return validation/diff evidence.  |
 | `graph_apply_patch`                                | A1    | Revision-safe, idempotent atomic mutation.            |
 | `graph_undo` / `graph_redo`                        | A1    | Reversible history operation with a new revision.     |
+| `preview_render_node_output`                       | A0    | Bounded in-memory PNG render of one native output.    |
 | `catalog_*`                                        | A0    | Search and inspect typed node descriptors.            |
 | `node_create`, `node_delete`, `node_set_parameter` | A1    | Atomic convenience wrappers over patches.             |
 | `connection_create`, `connection_delete`           | A1    | Typed atomic connection wrappers.                     |

@@ -8,4 +8,7 @@
 6. Apply the same patch against the inspected revision.
 7. Call `project_validate` with `standard` or `strict`.
 
-The baseline workflow is structurally valid but artistically neutral. Live preview/export adapters report unavailable rather than pretending that graph validity proves visual quality.
+The baseline workflow is structurally valid but artistically neutral. Use
+`preview_render_node_output` for a bounded PNG of an individual live node output, then judge the
+complete material in Material Maker's own 2D and 3D panels. Full panel capture and export remain
+capability-gated rather than pretending that graph validity proves visual quality.
