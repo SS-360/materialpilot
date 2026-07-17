@@ -1,6 +1,7 @@
 import {
   MaterialPilotError,
   type CapabilityManifest,
+  type GraphOperation,
   type GraphPatch,
   type GraphSnapshot,
   type PermissionMode,
@@ -16,7 +17,7 @@ import {
   type NodeTypeDescriptor
 } from "@materialpilot/node-catalog";
 import { BridgeClient, type BridgeInitializeResult } from "@materialpilot/bridge-protocol";
-import { ptexToSnapshot, type RawPtexProject } from "@materialpilot/ptex";
+import { parameterValueToRaw, ptexToSnapshot, type RawPtexProject } from "@materialpilot/ptex";
 import { validateGraph } from "@materialpilot/validator";
 
 export type Awaitable<T> = T | Promise<T>;
@@ -31,6 +32,16 @@ export type AppStatus = {
   activeProjectId: string | null;
   connectedProjectCount: number;
   permissionMode: PermissionMode;
+};
+
+export type PreviewImage = {
+  mimeType: "image/png";
+  data: string;
+  width: number;
+  height: number;
+  nodeId: string;
+  outputPort: number;
+  revision: number;
 };
 
 export type MaterialBackend = {
@@ -51,6 +62,12 @@ export type MaterialBackend = {
   applyPatch(patch: GraphPatch): Awaitable<PatchResult>;
   undo(projectId: string, expectedRevision: number): Awaitable<GraphSnapshot>;
   redo(projectId: string, expectedRevision: number): Awaitable<GraphSnapshot>;
+  renderNodePreview(
+    projectId: string,
+    nodeId: string,
+    outputPort: string | number,
+    resolution: number
+  ): Awaitable<PreviewImage>;
   listTransactions(projectId: string): Awaitable<Transaction[]>;
   searchCatalog(filter: CatalogSearch): NodeTypeDescriptor[];
 };
@@ -67,6 +84,7 @@ type NativePatchResponse = {
   status: "planned" | "committed";
   revision: number;
   temporaryIds?: Record<string, string>;
+  temporaryNativeIds?: Record<string, string>;
   changedEntityIds?: string[];
   serializedGraph: RawPtexProject;
 };
@@ -195,6 +213,49 @@ export class NativeBackend implements MaterialBackend {
     });
   }
 
+  async renderNodePreview(
+    projectId: string,
+    nodeId: string,
+    outputPort: string | number,
+    resolution: number
+  ): Promise<PreviewImage> {
+    const snapshot = await this.getSnapshot(projectId);
+    const node = snapshot.nodes.find(
+      (candidate) => candidate.id === nodeId || candidate.nativeId === nodeId
+    );
+    if (!node) throw new MaterialPilotError("NODE_NOT_FOUND", `Node ${nodeId} was not found.`);
+    const port =
+      typeof outputPort === "number"
+        ? node.outputs.find((candidate) => candidate.index === outputPort)
+        : node.outputs.find(
+            (candidate) =>
+              candidate.id === outputPort ||
+              candidate.name.toLocaleLowerCase() === outputPort.toLocaleLowerCase()
+          );
+    if (!port) {
+      throw new MaterialPilotError(
+        "PORT_NOT_FOUND",
+        `Output ${String(outputPort)} was not found on ${node.displayName}.`
+      );
+    }
+    const response = (await this.#client.request(
+      "preview.render_node_output",
+      {
+        projectId,
+        nodeId: node.nativeId,
+        outputPort: port.index,
+        resolution
+      },
+      60_000
+    )) as Omit<PreviewImage, "nodeId" | "outputPort" | "revision">;
+    return {
+      ...response,
+      nodeId: node.id,
+      outputPort: port.index,
+      revision: snapshot.revision
+    };
+  }
+
   listTransactions(): Transaction[] {
     return [];
   }
@@ -205,13 +266,107 @@ export class NativeBackend implements MaterialBackend {
 
   async #patch(patch: GraphPatch): Promise<PatchResult> {
     const before = await this.getSnapshot(patch.projectId);
-    const nativePatch: GraphPatch = {
+    const temporaryTypes = new Map<string, NodeTypeDescriptor>();
+    const resolveNode = (nodeId: string): string =>
+      before.nodes.find((node) => node.id === nodeId || node.nativeId === nodeId)?.nativeId ??
+      nodeId;
+    const resolvePort = (
+      nodeId: string,
+      selector: string | number,
+      direction: "input" | "output"
+    ): string | number => {
+      if (typeof selector === "number") return selector;
+      const requested = selector.toLocaleLowerCase();
+      const node = before.nodes.find(
+        (candidate) => candidate.id === nodeId || candidate.nativeId === nodeId
+      );
+      const runtimePort = (direction === "input" ? node?.inputs : node?.outputs)?.find(
+        (port) => port.id === selector || port.name.toLocaleLowerCase() === requested
+      );
+      if (runtimePort) return runtimePort.index;
+      const descriptor = temporaryTypes.get(nodeId);
+      const catalogPorts = direction === "input" ? descriptor?.inputs : descriptor?.outputs;
+      const catalogIndex = catalogPorts?.findIndex(
+        (port) =>
+          port.name.toLocaleLowerCase() === requested ||
+          port.label.toLocaleLowerCase() === requested
+      );
+      return catalogIndex !== undefined && catalogIndex >= 0 ? catalogIndex : selector;
+    };
+    const nativeOperations = patch.operations.map((operation: GraphOperation) => {
+      if (operation.type === "node.create") {
+        const descriptor = this.catalog.get(operation.nodeTypeId);
+        if (operation.tempId) temporaryTypes.set(operation.tempId, descriptor);
+        return {
+          ...operation,
+          nodeTypeId: descriptor.nativeId,
+          ...(operation.parameters
+            ? {
+                parameters: Object.fromEntries(
+                  Object.entries(operation.parameters).map(([name, value]) => [
+                    name,
+                    parameterValueToRaw(value)
+                  ])
+                )
+              }
+            : {})
+        };
+      }
+      if (operation.type === "node.delete" || operation.type === "node.move") {
+        return { ...operation, nodeId: resolveNode(operation.nodeId) };
+      }
+      if (operation.type === "node.rename") {
+        return { ...operation, nodeId: resolveNode(operation.nodeId) };
+      }
+      if (operation.type === "node.set_parameter") {
+        return {
+          ...operation,
+          nodeId: resolveNode(operation.nodeId),
+          value: parameterValueToRaw(operation.value)
+        };
+      }
+      if (operation.type === "connection.create") {
+        return {
+          ...operation,
+          fromNodeId: resolveNode(operation.fromNodeId),
+          fromPort: resolvePort(operation.fromNodeId, operation.fromPort, "output"),
+          toNodeId: resolveNode(operation.toNodeId),
+          toPort: resolvePort(operation.toNodeId, operation.toPort, "input")
+        };
+      }
+      if (operation.type === "connection.delete") {
+        const connection = before.connections.find(
+          (candidate) => candidate.id === operation.connectionId
+        );
+        if (!connection) return operation;
+        const source = before.nodes.find((node) => node.id === connection.fromNodeId);
+        const target = before.nodes.find((node) => node.id === connection.toNodeId);
+        const fromPort = source?.outputs.find((port) => port.id === connection.fromPortId);
+        const toPort = target?.inputs.find((port) => port.id === connection.toPortId);
+        return {
+          ...operation,
+          nativeConnection: {
+            from: source?.nativeId,
+            fromPort: fromPort?.index,
+            to: target?.nativeId,
+            toPort: toPort?.index
+          }
+        };
+      }
+      return {
+        ...operation,
+        nodeIds: operation.nodeIds.map(resolveNode),
+        ...(operation.focusedNodeId === undefined
+          ? {}
+          : {
+              focusedNodeId:
+                operation.focusedNodeId === null ? null : resolveNode(operation.focusedNodeId)
+            })
+      };
+    });
+    const nativePatch = {
       ...patch,
-      operations: patch.operations.map((operation) =>
-        operation.type === "node.create"
-          ? { ...operation, nodeTypeId: this.catalog.get(operation.nodeTypeId).nativeId }
-          : operation
-      )
+      operations: nativeOperations
     };
     const response = (await this.#client.request(
       "graph.apply_patch",
@@ -225,6 +380,30 @@ export class NativeBackend implements MaterialBackend {
     const profile = patch.validationPolicy === "none" ? "structural" : patch.validationPolicy;
     const validation = validateGraph(snapshot, profile, this.catalog);
     const warnings = validation.diagnostics.filter((entry) => entry.severity === "warning");
+    const diff = diffGraphs(before, snapshot);
+    const temporaryIds: Record<string, string> = {};
+    for (const [tempId, value] of Object.entries(response.temporaryNativeIds ?? {})) {
+      temporaryIds[tempId] =
+        snapshot.nodes.find((node) => node.nativeId === value)?.id ??
+        snapshot.connections.find((connection) => connection.id === value)?.id ??
+        value;
+    }
+    for (const [tempId, value] of Object.entries(response.temporaryIds ?? {})) {
+      if (temporaryIds[tempId]) continue;
+      temporaryIds[tempId] =
+        snapshot.nodes.find((node) => node.id === value || node.nativeId === value)?.id ??
+        snapshot.connections.find((connection) => connection.id === value)?.id ??
+        value;
+    }
+    const changedEntityIds = [
+      ...new Set([
+        ...diff.addedNodes,
+        ...diff.removedNodes,
+        ...diff.changedNodes,
+        ...diff.addedConnections,
+        ...diff.removedConnections
+      ])
+    ];
     return {
       status: response.status,
       dryRun: response.status === "planned",
@@ -232,10 +411,10 @@ export class NativeBackend implements MaterialBackend {
       snapshot,
       validation,
       transaction: null,
-      temporaryIds: response.temporaryIds ?? {},
-      changedEntityIds: response.changedEntityIds ?? [],
+      temporaryIds,
+      changedEntityIds,
       warnings,
-      diff: diffGraphs(before, snapshot)
+      diff
     };
   }
 
@@ -364,6 +543,12 @@ export class InMemoryBackend implements MaterialBackend {
   }
   redo(projectId: string, expectedRevision: number) {
     return this.engine.redo(projectId, expectedRevision);
+  }
+  renderNodePreview(): PreviewImage {
+    throw new MaterialPilotError(
+      "CAPABILITY_NOT_AVAILABLE",
+      "Node-output preview requires the native Material Maker bridge."
+    );
   }
   listTransactions(projectId: string) {
     return this.engine.listTransactions(projectId);

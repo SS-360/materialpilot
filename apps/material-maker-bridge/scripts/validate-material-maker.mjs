@@ -15,14 +15,22 @@ await access(join(materialMaker, "project.godot"));
 const { BridgeClient } = await import(
   pathToFileURL(join(repository, "packages", "bridge-protocol", "dist", "index.js")).href
 );
+const { ptexToSnapshot } = await import(
+  pathToFileURL(join(repository, "packages", "ptex", "dist", "index.js")).href
+);
 
 const runtimeDirectory = join(tmpdir(), `materialpilot-material-maker-${process.pid}`);
 const runtimeFile = join(runtimeDirectory, "bridge.json");
 await mkdir(runtimeDirectory, { recursive: true });
 const output = { value: "" };
-const child = spawn(godot, ["--headless", "--path", materialMaker, "--", "--no-splash"], {
+const applicationArgs =
+  process.env.MATERIALPILOT_WINDOWED_TEST === "1"
+    ? ["--path", materialMaker, "--position", "-10000,-10000", "--", "--no-splash"]
+    : ["--headless", "--path", materialMaker, "--", "--no-splash"];
+const child = spawn(godot, applicationArgs, {
   env: { ...process.env, MATERIALPILOT_RUNTIME_DIR: runtimeDirectory },
-  stdio: ["ignore", "pipe", "pipe"]
+  stdio: ["ignore", "pipe", "pipe"],
+  windowsHide: true
 });
 child.stdout.on("data", (chunk) => (output.value += chunk.toString()));
 child.stderr.on("data", (chunk) => (output.value += chunk.toString()));
@@ -92,6 +100,53 @@ try {
   if (!Array.isArray(snapshot.serializedGraph?.nodes)) {
     throw new Error("Native graph snapshot did not include serialized nodes");
   }
+  const initialDomain = ptexToSnapshot(snapshot.serializedGraph, active.id, {
+    revision: snapshot.revision
+  });
+  const initialMaterial = initialDomain.nodes.find((node) => node.typeId === "mm.output.material");
+  if (!initialMaterial) throw new Error("Native graph did not expose a stable Material node");
+  const stableIdPlan = await client.request("graph.apply_patch", {
+    patch: {
+      patchVersion: "1",
+      projectId: active.id,
+      expectedRevision: snapshot.revision,
+      idempotencyKey: "stable-node-" + process.pid,
+      label: "MaterialPilot stable node ID probe",
+      dryRun: true,
+      validationPolicy: "structural",
+      operations: [
+        {
+          type: "node.set_parameter",
+          nodeId: initialMaterial.id,
+          parameter: "size",
+          value: initialMaterial.parameters.size
+        }
+      ]
+    }
+  });
+  if (stableIdPlan.status !== "planned") {
+    throw new Error("Stable snapshot node IDs were not accepted by the native bridge");
+  }
+  let nonDeletableRejected = false;
+  try {
+    await client.request("graph.apply_patch", {
+      patch: {
+        patchVersion: "1",
+        projectId: active.id,
+        expectedRevision: snapshot.revision,
+        idempotencyKey: "material-delete-" + process.pid,
+        label: "MaterialPilot non-deletable output probe",
+        dryRun: true,
+        validationPolicy: "structural",
+        operations: [{ type: "node.delete", nodeId: initialMaterial.id, cascade: "disconnect" }]
+      }
+    });
+  } catch (error) {
+    nonDeletableRejected = String(error).includes("NODE_NOT_DELETABLE");
+  }
+  if (!nonDeletableRejected) {
+    throw new Error("Non-deletable Material output was reported as a successful no-op");
+  }
   const probeOperations = [
     {
       type: "node.create",
@@ -153,6 +208,16 @@ try {
   ) {
     throw new Error("Native multi-node patch did not preserve nodes, connections, and parameters");
   }
+  const plannedDomain = ptexToSnapshot(planned.serializedGraph, active.id, {
+    revision: planned.revision
+  });
+  for (const tempId of ["height", "albedo", "normal"]) {
+    const nativeName = planned.temporaryNativeIds?.[tempId];
+    const node = plannedDomain.nodes.find((candidate) => candidate.nativeId === nativeName);
+    if (!node || planned.temporaryIds?.[tempId] !== node.id) {
+      throw new Error("Temporary ID mapping did not identify the planned node: " + tempId);
+    }
+  }
   const after = await client.request("graph.get_snapshot", { projectId: active.id });
   if (after.hash !== snapshot.hash || after.revision !== snapshot.revision) {
     const difference = firstDifference(
@@ -178,6 +243,64 @@ try {
   });
   if (committed.status !== "committed" || committed.revision !== after.revision + 1) {
     throw new Error("Native committed transaction contract failed");
+  }
+  const committedDomain = ptexToSnapshot(committed.serializedGraph, active.id, {
+    revision: committed.revision
+  });
+  const committedConnection = committedDomain.connections[0];
+  const committedNormal = committedDomain.nodes.find(
+    (node) => node.typeId === "mm.filter.normal-map"
+  );
+  if (!committedConnection || !committedNormal) {
+    throw new Error("Committed native graph did not expose stable deletion targets");
+  }
+  const deletionPlan = await client.request("graph.apply_patch", {
+    patch: {
+      patchVersion: "1",
+      projectId: active.id,
+      expectedRevision: committed.revision,
+      idempotencyKey: "stable-delete-" + process.pid,
+      label: "MaterialPilot stable deletion probe",
+      dryRun: true,
+      validationPolicy: "structural",
+      operations: [
+        { type: "connection.delete", connectionId: committedConnection.id },
+        { type: "node.delete", nodeId: committedNormal.id, cascade: "disconnect" }
+      ]
+    }
+  });
+  const deletionDomain = ptexToSnapshot(deletionPlan.serializedGraph, active.id, {
+    revision: deletionPlan.revision
+  });
+  if (
+    deletionDomain.connections.some((connection) => connection.id === committedConnection.id) ||
+    deletionDomain.nodes.some((node) => node.id === committedNormal.id)
+  ) {
+    throw new Error("Stable connection or cascading node deletion was absent from dry-run output");
+  }
+  const previewNode = committedDomain.nodes.find((node) => node.outputs.length > 0);
+  if (!previewNode) throw new Error("Committed graph did not expose a previewable node");
+  const preview = await client.request("preview.render_node_output", {
+    projectId: active.id,
+    nodeId: previewNode.id,
+    outputPort: previewNode.outputs[0].index,
+    resolution: 64
+  });
+  if (
+    preview.mimeType !== "image/png" ||
+    preview.width !== 64 ||
+    preview.height !== 64 ||
+    typeof preview.data !== "string" ||
+    preview.data.length < 32
+  ) {
+    throw new Error("Native node-output preview contract failed");
+  }
+  const afterDeletionPlan = await client.request("graph.get_snapshot", { projectId: active.id });
+  if (
+    afterDeletionPlan.hash !== committed.hash ||
+    afterDeletionPlan.revision !== committed.revision
+  ) {
+    throw new Error("Stable deletion dry-run changed the live native graph");
   }
 
   const undone = await client.request("graph.undo", {

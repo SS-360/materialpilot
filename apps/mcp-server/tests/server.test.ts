@@ -19,6 +19,7 @@ describe("MaterialPilot MCP server", () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toContain("graph_apply_patch");
     expect(tools.tools.map((tool) => tool.name)).toContain("workflow_create_material");
+    expect(tools.tools.map((tool) => tool.name)).toContain("preview_render_node_output");
     expect((await client.listResources()).resources.length).toBeGreaterThan(3);
     expect((await client.listPrompts()).prompts.length).toBeGreaterThan(3);
     await client.close();

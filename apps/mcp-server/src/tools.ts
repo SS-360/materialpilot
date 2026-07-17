@@ -107,6 +107,48 @@ export function registerTools(
     async ({ projectId, profile }) => json(await backend.validate(projectId, profile))
   );
   server.registerTool(
+    "preview_render_node_output",
+    {
+      description:
+        "Render a bounded PNG preview of one live Material Maker node output without writing a file.",
+      inputSchema: {
+        projectId: z.string(),
+        nodeId: z.string(),
+        outputPort: z.union([z.string(), z.number().int().nonnegative()]).default(0),
+        resolution: z.number().int().min(16).max(1024).default(64)
+      },
+      annotations: readAnnotations,
+      _meta: {
+        "materialpilot/safety": {
+          approvalClass: "A0",
+          sideEffects: ["bounded transient GPU render"]
+        }
+      }
+    },
+    async ({ projectId, nodeId, outputPort, resolution }) => {
+      const preview = await backend.renderNodePreview(projectId, nodeId, outputPort, resolution);
+      return {
+        content: [
+          { type: "image" as const, data: preview.data, mimeType: preview.mimeType },
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                nodeId: preview.nodeId,
+                outputPort: preview.outputPort,
+                revision: preview.revision,
+                width: preview.width,
+                height: preview.height
+              },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
     "graph_get_summary",
     {
       description: "Return compact graph counts, outputs, selection, connectivity, and complexity.",

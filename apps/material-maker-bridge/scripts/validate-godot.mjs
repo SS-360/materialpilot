@@ -17,8 +17,11 @@ const scripts = [
   "res://addons/materialpilot/plugin.gd"
 ];
 
-function runGodot(args) {
-  const result = spawnSync(godot, args, { encoding: "utf8" });
+function runGodot(args, environment = {}) {
+  const result = spawnSync(godot, args, {
+    encoding: "utf8",
+    env: { ...process.env, ...environment }
+  });
   if (result.status !== 0) {
     throw new Error(
       `Godot failed (${args.join(" ")}):\n${result.stdout ?? ""}\n${result.stderr ?? ""}`
@@ -129,10 +132,14 @@ try {
     '[gd_scene load_steps=2 format=3]\n\n[ext_resource path="res://main.gd" type="Script" id="1"]\n\n[node name="Main" type="Node"]\nscript = ExtResource("1")\n',
     "utf8"
   );
+  await cp(join(root, "tests", "stable_id_probe.gd"), join(project, "stable_id_probe.gd"));
   runGodot(["--headless", "--editor", "--path", project, "--import", "--quit"]);
   for (const script of scripts) {
     runGodot(["--headless", "--path", project, "--script", script, "--check-only"]);
   }
+  runGodot(["--headless", "--path", project, "--script", "res://stable_id_probe.gd"], {
+    MATERIALPILOT_RUNTIME_DIR: join(project, "stable-id-runtime")
+  });
   await runBridgeContract();
   process.stdout.write(
     `Godot ${process.env.GODOT_VERSION ?? "4.7"} bridge parse, handshake, and status contracts passed.\n`

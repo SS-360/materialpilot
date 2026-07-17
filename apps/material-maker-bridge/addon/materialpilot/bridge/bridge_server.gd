@@ -101,7 +101,7 @@ func _handle_initialize(session: Dictionary, id, params: Dictionary) -> void:
 			"maxPatchOperations": 500,
 			"maxPayloadBytes": MAX_PAYLOAD_BYTES,
 			"maxConcurrentJobs": 2,
-			"maxPreviewResolution": 4096
+			"maxPreviewResolution": 1024
 		}
 	})
 
@@ -125,6 +125,8 @@ func _dispatch(method: String, params: Dictionary):
 			return _adapter.undo(params)
 		"graph.redo":
 			return _adapter.redo(params)
+		"preview.render_node_output":
+			return await _adapter.render_node_output(params)
 		_:
 			return MaterialPilotBridgeError.new(-32601, "Unknown bridge method: " + method)
 

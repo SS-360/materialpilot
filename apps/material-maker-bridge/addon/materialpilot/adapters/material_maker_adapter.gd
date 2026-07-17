@@ -17,7 +17,8 @@ func get_features() -> Dictionary:
 		"graph.write": editable,
 		"graph.transactions": editable,
 		"catalog.read": true,
-		"preview.capture": false,
+		"preview.capture": graph != null,
+		"preview.nodeOutput": graph != null,
 		"export.write": false,
 		"painting.read": _current_project_type() == "painting",
 		"painting.stroke": false,
@@ -119,6 +120,7 @@ func apply_graph_patch(params: Dictionary):
 			"status": "planned",
 			"revision": expected,
 			"temporaryIds": temporary_ids,
+			"temporaryNativeIds": temporary_native_ids,
 			"hash": _graph_hash(after),
 			"serializedGraph": after
 		}
@@ -134,6 +136,7 @@ func apply_graph_patch(params: Dictionary):
 		"status": "committed",
 		"revision": expected + 1,
 		"temporaryIds": temporary_ids,
+		"temporaryNativeIds": temporary_native_ids,
 		"changedEntityIds": changed,
 		"hash": _graph_hash(after),
 		"serializedGraph": after
@@ -186,6 +189,37 @@ func redo(params: Dictionary):
 	_revisions[graph.get_instance_id()] = _revision(graph) + 1
 	return get_graph_snapshot({})
 
+func render_node_output(params: Dictionary):
+	var graph = _current_graph()
+	if graph == null:
+		return _error(-32004, "PROJECT_NOT_FOUND")
+	if params.get("projectId") != _active_project_id():
+		return _error(-32004, "PROJECT_NOT_FOUND")
+	var native := _resolve_native(params.get("nodeId", ""), {})
+	if !graph.generator.has_node(native):
+		return _error(-32011, "NODE_NOT_FOUND")
+	var generator = graph.generator.get_node(native)
+	var output_port := _port_index(generator.get_output_defs(true), params.get("outputPort", 0))
+	if output_port < 0:
+		return _error(-32012, "PORT_NOT_FOUND")
+	var resolution: int = int(params.get("resolution", 64))
+	if resolution < 16 or resolution > 1024:
+		return _error(-32602, "Preview resolution must be between 16 and 1024")
+	var image: Image = await generator.render_output(output_port, Vector2i(resolution, resolution))
+	if image == null or image.is_empty():
+		return _error(-32020, "Preview render returned no image")
+	var png := image.save_png_to_buffer()
+	if png.is_empty():
+		return _error(-32020, "Preview PNG encoding failed")
+	if png.size() > 6 * 1024 * 1024:
+		return _error(-32021, "Preview exceeds the bridge response limit")
+	return {
+		"mimeType": "image/png",
+		"data": Marshalls.raw_to_base64(png),
+		"width": image.get_width(),
+		"height": image.get_height()
+	}
+
 func _apply_operation(graph, operation: Dictionary, temporary_native_ids: Dictionary, temporary_ids: Dictionary, changed: Array):
 	var type: String = operation.get("type", "")
 	match type:
@@ -209,18 +243,26 @@ func _apply_operation(graph, operation: Dictionary, temporary_native_ids: Dictio
 			var view_name := "node_" + native
 			if !graph.has_node(view_name):
 				return _error(-32011, "NODE_NOT_FOUND")
+			var view = graph.get_node(view_name)
+			if !view.generator.can_be_deleted():
+				return _error(-32602, "NODE_NOT_DELETABLE", {"nodeId": operation.get("nodeId", ""), "nativeId": native})
 			if operation.get("cascade", "reject") == "reject":
 				for connection in graph.generator.connections:
 					if connection.from == native or connection.to == native:
 						return _error(-32602, "Node is connected; use cascade=disconnect")
-			graph.do_remove_node(graph.get_node(view_name))
+			graph.do_remove_node(view)
+			if graph.generator.has_node(native):
+				return _error(-32020, "Node deletion did not change the native graph")
 			changed.append(_node_id(graph, native))
 		"node.set_parameter":
 			var native := _resolve_native(operation.get("nodeId", ""), temporary_native_ids)
 			if !graph.generator.has_node(native):
 				return _error(-32011, "NODE_NOT_FOUND")
 			var generator = graph.generator.get_node(native)
-			generator.set_parameter(operation.get("parameter", ""), operation.get("value"))
+			var parameter_name: String = operation.get("parameter", "")
+			if generator.get_parameter_def(parameter_name).is_empty() and !generator.parameters.has(parameter_name):
+				return _error(-32602, "INVALID_PARAMETER", {"nodeId": operation.get("nodeId", ""), "parameter": parameter_name})
+			generator.set_parameter(parameter_name, _deserialize_native_parameter(operation.get("value")))
 			changed.append(_node_id(graph, native))
 		"node.move":
 			var native := _resolve_native(operation.get("nodeId", ""), temporary_native_ids)
@@ -242,14 +284,24 @@ func _apply_operation(graph, operation: Dictionary, temporary_native_ids: Dictio
 				return _error(-32012, "PORT_NOT_FOUND")
 			if !graph.do_connect_node("node_" + from_native, from_port, "node_" + to_native, to_port):
 				return _error(-32013, "PORT_TYPE_MISMATCH")
+			for index in graph.generator.connections.size():
+				var created_connection: Dictionary = graph.generator.connections[index]
+				if created_connection.from == from_native and int(created_connection.from_port) == from_port and created_connection.to == to_native and int(created_connection.to_port) == to_port:
+					var created_id := _connection_id(index, created_connection)
+					changed.append(created_id)
+					if operation.has("tempId"):
+						temporary_ids[operation.tempId] = created_id
+					break
 		"connection.delete":
 			var requested_id: String = operation.get("connectionId", "")
+			var native_selector: Dictionary = operation.get("nativeConnection", {})
 			for index in graph.generator.connections.size():
 				var connection: Dictionary = graph.generator.connections[index]
-				if _connection_id(index, connection) == requested_id:
+				var native_match := !native_selector.is_empty() and str(native_selector.get("from", "")) == str(connection.from) and int(native_selector.get("fromPort", -1)) == int(connection.from_port) and str(native_selector.get("to", "")) == str(connection.to) and int(native_selector.get("toPort", -1)) == int(connection.to_port)
+				if native_match or _connection_id(index, connection) == requested_id:
 					if !graph.do_disconnect_node("node_" + connection.from, connection.from_port, "node_" + connection.to, connection.to_port):
 						return _error(-32020, "Could not disconnect nodes")
-					changed.append(requested_id)
+					changed.append(_connection_id(index, connection))
 					return null
 			return _error(-32014, "CONNECTION_NOT_FOUND")
 		"selection.set":
@@ -349,12 +401,14 @@ func _active_project_id() -> String:
 func _node_id(graph, native_name: String) -> String:
 	return _stable_native_id("mmn", _active_project_id(), native_name)
 
-func _connection_id(index: int, connection: Dictionary) -> String:
-	var native_id := "%d:%s:%d:%s:%d" % [index, connection.from, connection.from_port, connection.to, connection.to_port]
+func _connection_id(_index: int, connection: Dictionary) -> String:
+	var native_id := "%s:%d:%s:%d" % [connection.from, connection.from_port, connection.to, connection.to_port]
 	return _stable_native_id("mmc", _active_project_id(), native_id)
 
 func _stable_native_id(prefix: String, project_id: String, native_id: String) -> String:
-	var bytes := (project_id + String.chr(0) + native_id).to_utf8_buffer()
+	var bytes := project_id.to_utf8_buffer()
+	bytes.append(0)
+	bytes.append_array(native_id.to_utf8_buffer())
 	var hash_value: int = 0x811c9dc5
 	for byte in bytes:
 		hash_value = int((hash_value ^ int(byte)) * 0x01000193) & 0xffffffff
@@ -439,6 +493,14 @@ func _port_index(definitions: Array, selector) -> int:
 			if str(definition.get(field, "")).to_lower() == requested:
 				return index
 	return -1
+
+func _deserialize_native_parameter(value):
+	const TYPES_PATH := "res://addons/material_maker/types/types.gd"
+	if ResourceLoader.exists(TYPES_PATH):
+		var types = load(TYPES_PATH)
+		if types != null and types.has_method("deserialize_value"):
+			return types.deserialize_value(value)
+	return value
 
 func _error(code: int, message: String, data = null):
 	return MaterialPilotBridgeError.new(code, message, data)
