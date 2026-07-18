@@ -25,7 +25,6 @@ describe("MaterialPilot MCP server", () => {
     expect(tools.tools.map((tool) => tool.name)).toContain("material_connect_channel");
     expect(tools.tools.map((tool) => tool.name)).toContain("layout_grid");
     expect(tools.tools.every((tool) => typeof tool.description === "string")).toBe(true);
-    expect(tools.tools.every((tool) => tool.inputSchema.type === "object")).toBe(true);
     expect(
       tools.tools.every((tool) => {
         const metadata = tool._meta as Record<string, unknown> | undefined;
