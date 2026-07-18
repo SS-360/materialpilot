@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   MaterialPilotError,
   type CapabilityManifest,
@@ -51,7 +52,7 @@ export type MaterialBackend = {
   capabilities(): Awaitable<CapabilityManifest>;
   listProjects(): Awaitable<Project[]>;
   activeProject(): Awaitable<Project | null>;
-  createMaterialProject(name: string): Awaitable<Project>;
+  createMaterialProject(name: string, idempotencyKey?: string): Awaitable<Project>;
   getSnapshot(projectId: string): Awaitable<GraphSnapshot>;
   getSummary(projectId: string): Awaitable<GraphSummary>;
   validate(
@@ -144,11 +145,16 @@ export class NativeBackend implements MaterialBackend {
     return Object.keys(project).length === 0 ? null : this.#normalizeProject(project);
   }
 
-  createMaterialProject(): Project {
-    throw new MaterialPilotError(
-      "CAPABILITY_NOT_AVAILABLE",
-      "The native bridge does not yet expose project creation."
-    );
+  async createMaterialProject(
+    name: string,
+    idempotencyKey: string = randomUUID()
+  ): Promise<Project> {
+    const project = (await this.#client.request(
+      "project.create_material",
+      { name, idempotencyKey },
+      15_000
+    )) as Record<string, unknown>;
+    return this.#normalizeProject(project);
   }
 
   async getSnapshot(projectId: string): Promise<GraphSnapshot> {
@@ -423,7 +429,7 @@ export class NativeBackend implements MaterialBackend {
       id: String(value.id),
       type: value.type === "painting" ? "painting" : "material",
       name: String(value.name ?? "Untitled"),
-      path: typeof value.path === "string" ? value.path : null,
+      path: typeof value.path === "string" && value.path.length > 0 ? value.path : null,
       revision: Number(value.revision ?? 0),
       dirty: value.dirty === true,
       active: value.active === true,
@@ -459,6 +465,7 @@ function componentCount(snapshot: GraphSnapshot): number {
 export class InMemoryBackend implements MaterialBackend {
   readonly engine: GraphEngine;
   readonly permissionMode: PermissionMode;
+  readonly #projectCreations = new Map<string, { name: string; project: Project }>();
 
   constructor(options: { engine?: GraphEngine; permissionMode?: PermissionMode } = {}) {
     this.engine = options.engine ?? new GraphEngine();
@@ -520,8 +527,22 @@ export class InMemoryBackend implements MaterialBackend {
   activeProject() {
     return this.engine.activeProject();
   }
-  createMaterialProject(name: string) {
-    return this.engine.createMaterialProject(name);
+  createMaterialProject(name: string, idempotencyKey?: string) {
+    if (idempotencyKey) {
+      const existing = this.#projectCreations.get(idempotencyKey);
+      if (existing) {
+        if (existing.name !== name) {
+          throw new MaterialPilotError(
+            "INVALID_REQUEST",
+            "Project creation idempotency key was reused with different arguments."
+          );
+        }
+        return structuredClone(existing.project);
+      }
+    }
+    const project = this.engine.createMaterialProject(name);
+    if (idempotencyKey) this.#projectCreations.set(idempotencyKey, { name, project });
+    return project;
   }
   getSnapshot(projectId: string) {
     return this.engine.getSnapshot(projectId);

@@ -117,6 +117,8 @@ func _dispatch(method: String, params: Dictionary):
 			return _adapter.list_projects()
 		"project.get_active":
 			return _adapter.get_active_project()
+		"project.create_material":
+			return await _adapter.create_material_project(params)
 		"graph.get_snapshot":
 			return _adapter.get_graph_snapshot(params)
 		"graph.apply_patch":

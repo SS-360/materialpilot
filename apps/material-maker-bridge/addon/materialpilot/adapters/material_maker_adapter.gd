@@ -13,6 +13,7 @@ func get_features() -> Dictionary:
 	return {
 		"application.read": true,
 		"project.read": true,
+		"project.create": _main_window() != null,
 		"graph.read": graph != null,
 		"graph.write": editable,
 		"graph.transactions": editable,
@@ -42,10 +43,15 @@ func list_projects() -> Array:
 	var main = _main_window()
 	if main == null:
 		return []
-	var current = main.get_current_project() if main.has_method("get_current_project") else null
-	if current == null:
+	if !("projects_panel" in main) or main.projects_panel == null:
 		return []
-	return [_project_summary(current, true)]
+	var tabs = main.projects_panel.get_projects()
+	var current = main.get_current_project() if main.has_method("get_current_project") else null
+	var projects: Array = []
+	for index in tabs.get_tab_count():
+		var project = tabs.get_child(index)
+		projects.append(_project_summary(project, project == current))
+	return projects
 
 func get_active_project() -> Dictionary:
 	var main = _main_window()
@@ -53,6 +59,72 @@ func get_active_project() -> Dictionary:
 		return {}
 	var project = main.get_current_project()
 	return {} if project == null else _project_summary(project, true)
+
+func create_material_project(params: Dictionary):
+	var requested_name := str(params.get("name", "")).strip_edges()
+	if requested_name.is_empty() or requested_name.length() > 120:
+		return _error(-32602, "Project name must contain between 1 and 120 characters")
+	var key := str(params.get("idempotencyKey", ""))
+	if key.length() < 8 or key.length() > 200:
+		return _error(-32602, "An idempotency key between 8 and 200 characters is required")
+	var scoped_key := "project-create:" + key
+	var request_hash := _hash_value({"name": requested_name})
+	if _idempotency.has(scoped_key):
+		if _idempotency[scoped_key].hash != request_hash:
+			return _error(-32602, "Idempotency key reused with different arguments")
+		return _idempotency[scoped_key].result
+	var main = _main_window()
+	if main == null or !main.has_method("new_graph_panel") or !("projects_panel" in main):
+		return _error(-32030, "CAPABILITY_NOT_AVAILABLE")
+	var tabs = main.projects_panel.get_projects()
+	var previous_tab: int = tabs.current_tab
+	var graph = main.new_graph_panel()
+	if graph == null:
+		return _error(-32020, "Could not create a Material Maker graph panel")
+	graph.set_meta("materialpilot_project_name", requested_name)
+	await graph.new_material()
+	if graph.top_generator == null or !_structurally_valid(graph):
+		_rollback_created_project(tabs, graph, previous_tab)
+		return _error(-32020, "Material Maker did not initialize the new material graph")
+	if "current_mesh" in main:
+		graph.top_generator.set_current_mesh(main.current_mesh)
+	_revisions[graph.get_instance_id()] = 0
+	graph.set_need_save(false)
+	graph.need_save_crash_recovery = false
+	if graph.has_signal("graph_changed"):
+		graph.graph_changed.connect(_refresh_materialpilot_project_title.bind(graph))
+	if graph.has_signal("save_path_changed"):
+		graph.save_path_changed.connect(_on_materialpilot_project_save_path_changed.bind(graph))
+	_refresh_materialpilot_project_title(graph)
+	if "hierarchy" in main and main.hierarchy != null and main.hierarchy.has_method("update_from_graph_edit"):
+		main.hierarchy.update_from_graph_edit(graph)
+	var result := _project_summary(graph, true)
+	_idempotency[scoped_key] = {"hash": request_hash, "result": result}
+	return result
+
+func _refresh_materialpilot_project_title(graph) -> void:
+	if graph == null or !is_instance_valid(graph) or !graph.has_meta("materialpilot_project_name"):
+		return
+	if "save_path" in graph and !graph.save_path.is_empty():
+		return
+	var main = _main_window()
+	if main == null or !("projects_panel" in main):
+		return
+	var title := str(graph.get_meta("materialpilot_project_name"))
+	if "need_save" in graph and graph.need_save:
+		title += " *"
+	main.projects_panel.get_projects().set_tab_title(graph.get_index(), title)
+
+func _on_materialpilot_project_save_path_changed(_changed_graph, _path: String, graph) -> void:
+	_refresh_materialpilot_project_title(graph)
+
+func _rollback_created_project(tabs, graph, previous_tab: int) -> void:
+	if graph != null and is_instance_valid(graph):
+		var created_index: int = graph.get_index()
+		if created_index >= 0 and created_index < tabs.get_tab_count():
+			tabs.do_close_tab(created_index)
+	if previous_tab >= 0 and previous_tab < tabs.get_tab_count():
+		tabs.current_tab = previous_tab
 
 func get_graph_snapshot(params: Dictionary):
 	var graph = _current_graph()
@@ -443,11 +515,12 @@ func _revision(graph) -> int:
 	return int(_revisions.get(graph.get_instance_id(), 0))
 
 func _project_summary(project, active: bool) -> Dictionary:
-	var graph = _current_graph() if active else null
+	var graph = project.get_graph_edit() if project != null and project.has_method("get_graph_edit") else null
+	var project_name := str(project.get_meta("materialpilot_project_name", project.name))
 	return {
-		"id": _active_project_id() if active else _project_id(project),
+		"id": _project_id(project),
 		"type": project.get_project_type() if project.has_method("get_project_type") else "unknown",
-		"name": project.name,
+		"name": project_name,
 		"path": project.save_path if "save_path" in project else null,
 		"revision": _revision(graph) if graph != null else 0,
 		"dirty": graph.need_save if graph != null and "need_save" in graph else false,

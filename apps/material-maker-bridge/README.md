@@ -6,11 +6,11 @@ The bridge writes `~/.materialpilot/bridge.json` by default, or `bridge.json` un
 `MATERIALPILOT_RUNTIME_DIR` when set. The record contains an ephemeral token and must be readable
 only by the current user. It is removed on clean shutdown.
 
-The current bridge implements authenticated status, project inspection, raw graph snapshots,
-revision-checked patching, idempotency, rollback, native undo/redo integration, and bounded
-in-memory PNG rendering for individual node outputs. Full 2D/3D panel capture, export, and painting
-mutation capabilities remain unavailable until their adapters have equivalent transaction and
-cancellation guarantees.
+The current bridge implements authenticated status, multi-tab project inspection, rollback-safe
+and idempotent native material creation, raw graph snapshots, revision-checked patching, rollback,
+native undo/redo integration, and bounded in-memory PNG rendering for individual node outputs.
+Native project open/save/close, full 2D/3D panel capture, export, and painting mutation capabilities
+remain unavailable until their adapters have equivalent transaction and cancellation guarantees.
 
 See the [installation and run guide](../../docs/user/installation.md) for complete setup,
 verification, Codex MCP configuration, and live texture examples.

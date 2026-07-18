@@ -10,6 +10,12 @@ All notable changes use Keep a Changelog conventions.
 - Authenticated native Material Maker 1.7 bridge with canonical snapshots, atomic graph patches, dry-run rollback, revision checks, idempotency, and native undo/redo integration.
 - Godot 4.7 and full Material Maker application contract tests, standalone release packaging, SBOM, and SHA-256 verification.
 - Bounded in-memory PNG rendering for live node outputs through `preview_render_node_output`.
+- Expanded the negotiated MCP surface from 28 to 138 schema-defined, safety-annotated tools across
+  project, graph, catalog, node, connection, transaction, layout, PBR, preview, diagnostics,
+  performance, and procedural texture workflows.
+- Added rollback-safe, idempotent native material project creation with multi-tab project listing
+  and persistent unsaved tab names.
+- Added native workflows for cracked stone, basalt, sandstone, lava, and oxidized-metal materials.
 
 ### Fixed
 

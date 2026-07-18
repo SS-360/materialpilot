@@ -12,6 +12,50 @@ const fixturePath = fileURLToPath(
 const serializedGraph = JSON.parse(readFileSync(fixturePath, "utf8")) as RawPtexProject;
 
 describe("NativeBackend bridge translation", () => {
+  it("creates and normalizes a native material project idempotently", async () => {
+    const client = {
+      connected: true,
+      request: vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        expect(method).toBe("project.create_material");
+        expect(params).toEqual({ name: "test_cracked_stone", idempotencyKey: "create-test-key" });
+        return {
+          id: "mmpr_native_created",
+          type: "material",
+          name: "test_cracked_stone",
+          path: null,
+          revision: 0,
+          dirty: false,
+          active: true
+        };
+      })
+    };
+    const manifest: BridgeInitializeResult = {
+      protocolVersion: "1.0",
+      bridgeVersion: "0.1.0",
+      instanceId: "mmi_test",
+      nonce: "0123456789abcdef",
+      materialMakerVersion: "1.7",
+      godotVersion: "4.7",
+      projectTypes: ["material"],
+      features: { "project.create": true },
+      limits: {
+        maxPatchOperations: 500,
+        maxPayloadBytes: 8 * 1024 * 1024,
+        maxConcurrentJobs: 2,
+        maxPreviewResolution: 1024
+      }
+    };
+    const backend = new NativeBackend(client as never, manifest, "workspace-autonomous");
+    await expect(
+      backend.createMaterialProject("test_cracked_stone", "create-test-key")
+    ).resolves.toMatchObject({
+      id: "mmpr_native_created",
+      name: "test_cracked_stone",
+      revision: 0,
+      dirty: false
+    });
+  });
+
   it("translates stable catalog type IDs to Material Maker native IDs", async () => {
     let sentPatch: GraphPatch | undefined;
     const client = {

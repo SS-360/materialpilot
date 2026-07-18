@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { graphPatchSchema, type GraphOperation } from "@materialpilot/domain";
 import { PermissionPolicy } from "@materialpilot/security";
 import type { MaterialBackend } from "./backend.js";
+import { registerExpandedTools } from "./expanded-tools.js";
 
 function json(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -81,6 +82,11 @@ export function registerTools(
       description: "Create a new editable material project with a standard PBR output node.",
       inputSchema: {
         name: z.string().min(1).max(120),
+        idempotencyKey: z
+          .string()
+          .min(8)
+          .max(200)
+          .default(() => randomUUID()),
         approvalToken: z.string().optional()
       },
       annotations: editAnnotations,
@@ -88,9 +94,9 @@ export function registerTools(
         "materialpilot/safety": { approvalClass: "A1", sideEffects: ["creates in-memory project"] }
       }
     },
-    async ({ name, approvalToken }) => {
+    async ({ name, idempotencyKey, approvalToken }) => {
       policy.authorize("A1", approvalToken);
-      return json(await backend.createMaterialProject(name));
+      return json(await backend.createMaterialProject(name, idempotencyKey));
     }
   );
   server.registerTool(
@@ -402,6 +408,7 @@ export function registerTools(
 
   registerAtomicTools(server, backend, policy);
   registerWorkflowTools(server, backend, policy);
+  registerExpandedTools(server, backend, policy);
 }
 
 function registerAtomicTools(
@@ -558,6 +565,11 @@ function registerWorkflowTools(
         "Create a deterministic editable baseline material with noise, albedo, roughness, and normal stages.",
       inputSchema: {
         name: z.string().min(1).max(120),
+        idempotencyKey: z
+          .string()
+          .min(8)
+          .max(200)
+          .default(() => randomUUID()),
         resolution: z.number().int().min(16).max(4096).default(1024),
         scale: z.number().min(1).max(256).default(8),
         approvalToken: z.string().optional()
@@ -570,10 +582,18 @@ function registerWorkflowTools(
         }
       }
     },
-    async ({ name, resolution, scale, approvalToken }) => {
+    async ({ name, idempotencyKey, resolution, scale, approvalToken }) => {
       policy.authorize("A1", approvalToken);
-      const project = await backend.createMaterialProject(name);
+      const project = await backend.createMaterialProject(name, idempotencyKey);
       const snapshot = await backend.getSnapshot(project.id);
+      if (snapshot.revision > 0) {
+        return json({
+          project: (await backend.activeProject()) ?? project,
+          status: "replayed",
+          snapshot,
+          validation: await backend.validate(project.id, "standard")
+        });
+      }
       const size = Math.round(Math.log2(resolution));
       const result = await backend.applyPatch({
         patchVersion: "1",

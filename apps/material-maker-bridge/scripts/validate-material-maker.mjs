@@ -21,14 +21,22 @@ const { ptexToSnapshot } = await import(
 
 const runtimeDirectory = join(tmpdir(), `materialpilot-material-maker-${process.pid}`);
 const runtimeFile = join(runtimeDirectory, "bridge.json");
+const userDataDirectory = join(runtimeDirectory, "user-data");
 await mkdir(runtimeDirectory, { recursive: true });
+await mkdir(userDataDirectory, { recursive: true });
 const output = { value: "" };
 const applicationArgs =
   process.env.MATERIALPILOT_WINDOWED_TEST === "1"
     ? ["--path", materialMaker, "--position", "-10000,-10000", "--", "--no-splash"]
     : ["--headless", "--path", materialMaker, "--", "--no-splash"];
 const child = spawn(godot, applicationArgs, {
-  env: { ...process.env, MATERIALPILOT_RUNTIME_DIR: runtimeDirectory },
+  env: {
+    ...process.env,
+    MATERIALPILOT_RUNTIME_DIR: runtimeDirectory,
+    APPDATA: userDataDirectory,
+    LOCALAPPDATA: userDataDirectory,
+    XDG_DATA_HOME: userDataDirectory
+  },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true
 });
@@ -95,10 +103,74 @@ try {
   if (!status?.activeProjectId) {
     throw new Error(`Material Maker did not initialize an active project:\n${output.value}`);
   }
-  const active = await client.request("project.get_active");
-  const snapshot = await client.request("graph.get_snapshot", { projectId: active.id });
+  let active = await client.request("project.get_active");
+  let snapshot = await client.request("graph.get_snapshot", { projectId: active.id });
   if (!Array.isArray(snapshot.serializedGraph?.nodes)) {
     throw new Error("Native graph snapshot did not include serialized nodes");
+  }
+  const projectsBeforeCreate = await client.request("project.list");
+  let invalidCreationRejected = false;
+  try {
+    await client.request("project.create_material", {
+      name: " ",
+      idempotencyKey: `invalid-create-${process.pid}`
+    });
+  } catch (error) {
+    invalidCreationRejected = String(error).includes("Project name");
+  }
+  if (!invalidCreationRejected) {
+    throw new Error("Invalid native project creation was not rejected");
+  }
+  if ((await client.request("project.list")).length !== projectsBeforeCreate.length) {
+    throw new Error("Rejected native project creation left a partial project tab");
+  }
+  const createKey = `native-create-${process.pid}`;
+  const created = await client.request("project.create_material", {
+    name: "test_cracked_stone",
+    idempotencyKey: createKey
+  });
+  if (
+    created.name !== "test_cracked_stone" ||
+    created.type !== "material" ||
+    created.revision !== 0 ||
+    created.dirty !== false ||
+    created.active !== true
+  ) {
+    throw new Error(
+      `Native project creation returned an invalid summary: ${JSON.stringify(created)}`
+    );
+  }
+  const replayedCreate = await client.request("project.create_material", {
+    name: "test_cracked_stone",
+    idempotencyKey: createKey
+  });
+  if (replayedCreate.id !== created.id) {
+    throw new Error("Native project creation idempotency did not replay the created project");
+  }
+  let conflictingCreateRejected = false;
+  try {
+    await client.request("project.create_material", {
+      name: "different_name",
+      idempotencyKey: createKey
+    });
+  } catch (error) {
+    conflictingCreateRejected = String(error).includes("different arguments");
+  }
+  if (!conflictingCreateRejected) {
+    throw new Error("Native project creation accepted conflicting idempotency arguments");
+  }
+  const projectsAfterCreate = await client.request("project.list");
+  if (
+    projectsAfterCreate.length !== projectsBeforeCreate.length + 1 ||
+    !projectsAfterCreate.some((project) => project.id === created.id && project.active) ||
+    !projectsAfterCreate.some((project) => project.id !== created.id && !project.active)
+  ) {
+    throw new Error("Native project list did not expose the newly created and previous tabs");
+  }
+  active = await client.request("project.get_active");
+  snapshot = await client.request("graph.get_snapshot", { projectId: active.id });
+  if (active.id !== created.id || snapshot.serializedGraph.nodes.length !== 1) {
+    throw new Error("Native project creation did not activate a clean standard material graph");
   }
   const initialDomain = ptexToSnapshot(snapshot.serializedGraph, active.id, {
     revision: snapshot.revision
@@ -339,7 +411,7 @@ try {
     throw new Error(`Native final restore contract failed: ${JSON.stringify(restoreDifference)}`);
   }
   process.stdout.write(
-    `Material Maker ${status.materialMakerVersion} native patch, rollback, undo, and redo contracts passed on Godot ${status.godotVersion}.\n`
+    `Material Maker ${status.materialMakerVersion} native project creation, patch, rollback, undo, redo, and preview contracts passed on Godot ${status.godotVersion}.\n`
   );
 } catch (error) {
   throw new Error(

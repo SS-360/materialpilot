@@ -4,9 +4,10 @@ This guide installs MaterialPilot, adds its native bridge to Material Maker, con
 server to Codex, verifies the live connection, and creates a first procedural material.
 
 MaterialPilot 0.1.0 is an implementation preview for Material Maker 1.7 running on Godot 4.7.
-Live graph inspection, atomic graph edits, revision checks, dry runs, undo, and redo are supported.
-Native project create/open/save/close, full material 2D/3D capture, texture export, and painting
-writes are not yet available. Bounded PNG rendering of individual live node outputs is available.
+Live material creation, graph inspection, atomic graph edits, revision checks, dry runs, undo, and
+redo are supported through a 138-tool MCP surface. Native project open/save/close, full material
+2D/3D capture, texture export, and painting writes are not yet available. Bounded PNG rendering of
+individual live node outputs is available.
 
 ## How the pieces fit together
 
@@ -19,7 +20,7 @@ MaterialPilot has three local components:
 For a live session, start them in this order:
 
 1. Start Material Maker with the native bridge enabled.
-2. Open or create a material in Material Maker.
+2. Open a material in Material Maker, or leave its initial tab open so MCP can create a new one.
 3. Start or restart Codex so it launches the MCP server after the bridge record exists.
 4. Verify `app_get_status` reports `bridgeConnected: true` and `offlineMode: false`.
 
@@ -345,13 +346,27 @@ troubleshooting section below and restart Codex after the bridge is available.
 
 ## Create the first live texture
 
-MaterialPilot 0.1.0 cannot create or save a native Material Maker project. In Material Maker:
+MaterialPilot 0.1.0 can create a new unsaved native material tab, but it cannot choose a path or
+save it. In Material Maker:
 
-1. Create a new material or open an existing one.
+1. Open an existing material, or leave Material Maker running and let a `workflow_create_*` tool
+   create a new material tab.
 2. Make that material the active tab.
 3. Leave Material Maker running.
 4. Paste one of the prompts below into Codex.
 5. Save manually in Material Maker with **Ctrl+S** after inspecting the result.
+
+The shortest creation test is:
+
+```text
+Use MaterialPilot's workflow_create_cracked_stone tool to create a new native material named
+test_cracked_stone at 1024 resolution. Supply a fresh idempotency key, then validate the returned
+project with the standard profile and report its revision, node count, and connection count.
+Do not save or export it.
+```
+
+The expected result is a newly active `test_cracked_stone` tab at revision 1 with four nodes, six
+connections, and a valid standard validation report.
 
 ### Example 1: dark basalt
 

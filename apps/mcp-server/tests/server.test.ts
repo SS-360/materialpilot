@@ -17,9 +17,21 @@ describe("MaterialPilot MCP server", () => {
   it("lists coherent tools, resources, and prompts", async () => {
     const { client, server } = await connectedPair();
     const tools = await client.listTools();
+    expect(tools.tools).toHaveLength(138);
     expect(tools.tools.map((tool) => tool.name)).toContain("graph_apply_patch");
     expect(tools.tools.map((tool) => tool.name)).toContain("workflow_create_material");
     expect(tools.tools.map((tool) => tool.name)).toContain("preview_render_node_output");
+    expect(tools.tools.map((tool) => tool.name)).toContain("workflow_create_cracked_stone");
+    expect(tools.tools.map((tool) => tool.name)).toContain("material_connect_channel");
+    expect(tools.tools.map((tool) => tool.name)).toContain("layout_grid");
+    expect(tools.tools.every((tool) => typeof tool.description === "string")).toBe(true);
+    expect(tools.tools.every((tool) => tool.inputSchema.type === "object")).toBe(true);
+    expect(
+      tools.tools.every((tool) => {
+        const metadata = tool._meta as Record<string, unknown> | undefined;
+        return typeof metadata?.["materialpilot/safety"] === "object";
+      })
+    ).toBe(true);
     expect((await client.listResources()).resources.length).toBeGreaterThan(3);
     expect((await client.listPrompts()).prompts.length).toBeGreaterThan(3);
     await client.close();
@@ -30,7 +42,7 @@ describe("MaterialPilot MCP server", () => {
     const { client, server } = await connectedPair();
     const created = await client.callTool({
       name: "project_create_material",
-      arguments: { name: "MCP Test" }
+      arguments: { name: "MCP Test", idempotencyKey: "mcp-create-test" }
     });
     expect(created.isError).not.toBe(true);
     const projects = (await client.callTool({ name: "project_list", arguments: {} })) as {
@@ -59,6 +71,43 @@ describe("MaterialPilot MCP server", () => {
     expect(snapshot.nodes).toHaveLength(4);
     expect(snapshot.connections).toHaveLength(5);
     expect((await backend.validate(project!.id, "standard")).valid).toBe(true);
+    await client.close();
+    await server.close();
+  });
+
+  it("runs an expanded cracked-stone workflow and observes it through focused tools", async () => {
+    const { client, server, backend } = await connectedPair();
+    const created = await backend.createMaterialProject("Cracked Stone", "cracked-project-key");
+    const applied = await client.callTool({
+      name: "workflow_apply_cracked_stone",
+      arguments: {
+        projectId: created.id,
+        expectedRevision: 0,
+        idempotencyKey: "cracked-graph-key",
+        resolution: 1024
+      }
+    });
+    expect(applied.isError).not.toBe(true);
+    const replayed = await client.callTool({
+      name: "workflow_apply_cracked_stone",
+      arguments: {
+        projectId: created.id,
+        expectedRevision: 0,
+        idempotencyKey: "cracked-graph-key",
+        resolution: 1024
+      }
+    });
+    expect(replayed.isError).not.toBe(true);
+    const statistics = await client.callTool({
+      name: "graph_get_statistics",
+      arguments: { projectId: created.id }
+    });
+    expect(statistics.isError).not.toBe(true);
+    const snapshot = await backend.getSnapshot(created.id);
+    expect(snapshot.revision).toBe(1);
+    expect(snapshot.nodes).toHaveLength(4);
+    expect(snapshot.connections).toHaveLength(6);
+    expect((await backend.validate(created.id, "standard")).valid).toBe(true);
     await client.close();
     await server.close();
   });
