@@ -27,14 +27,14 @@
     "materialpilot": "node apps/mcp-server/dist/main.js"
   },
   "devDependencies": {
-    "@eslint/js": "^9.31.0",
-    "@types/node": "^24.0.15",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.0",
-    "eslint": "^9.31.0",
+    "eslint": "^10.7.0",
     "prettier": "^3.6.2",
     "tsx": "^4.20.3",
     "turbo": "^2.5.5",
-    "typescript": "^5.9.2",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.38.0",
     "vitest": "^4.1.0"
   }
