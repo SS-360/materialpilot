@@ -13,6 +13,25 @@ if (!godot || !materialMaker) {
   throw new Error("Set GODOT_BIN and MATERIAL_MAKER_PROJECT for the native application contract.");
 }
 await access(join(materialMaker, "project.godot"));
+for (const relative of [
+  "adapters/material_maker_adapter.gd",
+  "bridge/bridge_server.gd",
+  "bridge/bridge_error.gd"
+]) {
+  const source = await readFile(join(root, "addon", "materialpilot", relative));
+  const installedPath = join(materialMaker, "addons", "materialpilot", relative);
+  let installed;
+  try {
+    installed = await readFile(installedPath);
+  } catch {
+    throw new Error(`Material Maker is missing the MaterialPilot addon file: ${installedPath}`);
+  }
+  if (!source.equals(installed)) {
+    throw new Error(
+      `Material Maker has a stale MaterialPilot addon file: ${installedPath}. Copy apps/material-maker-bridge/addon/materialpilot into the project's addons directory before testing.`
+    );
+  }
+}
 const { BridgeClient } = await import(
   pathToFileURL(join(repository, "packages", "bridge-protocol", "dist", "index.js")).href
 );
@@ -26,10 +45,10 @@ const userDataDirectory = join(runtimeDirectory, "user-data");
 await mkdir(runtimeDirectory, { recursive: true });
 await mkdir(userDataDirectory, { recursive: true });
 const output = { value: "" };
-const applicationArgs =
-  process.env.MATERIALPILOT_WINDOWED_TEST === "1"
-    ? ["--path", materialMaker, "--position", "-10000,-10000", "--no-splash"]
-    : ["--headless", "--path", materialMaker, "--no-splash"];
+const windowedTest = process.env.MATERIALPILOT_WINDOWED_TEST === "1";
+const applicationArgs = windowedTest
+  ? ["--path", materialMaker, "--position", "-10000,-10000", "--no-splash"]
+  : ["--headless", "--path", materialMaker, "--no-splash"];
 const child = spawn(godot, applicationArgs, {
   env: {
     ...process.env,
@@ -187,6 +206,19 @@ try {
   }
   if (!status?.activeProjectId) {
     throw new Error(`Material Maker did not initialize an active project:\n${output.value}`);
+  }
+  const capabilities = await client.request("app.get_capabilities");
+  for (const feature of [
+    "preview.capture",
+    "preview.nodeOutput",
+    "preview.material3d",
+    "export.write"
+  ]) {
+    if (capabilities.features?.[feature] !== windowedTest) {
+      throw new Error(
+        `${feature} capability did not match renderer availability: ${JSON.stringify(capabilities)}`
+      );
+    }
   }
   let active = await client.request("project.get_active");
   let snapshot = await client.request("graph.get_snapshot", { projectId: active.id });
@@ -488,42 +520,58 @@ try {
   if (resolve(saved.path) !== resolve(savedPath) || saved.dirty !== false) {
     throw new Error(`Native project save contract failed: ${JSON.stringify(saved)}`);
   }
-  for (const geometry of ["sphere", "plane"]) {
-    const materialPreview = await client.request("preview.render_material_3d", {
+  if (windowedTest) {
+    for (const geometry of ["sphere", "plane"]) {
+      const materialPreview = await client.request("preview.render_material_3d", {
+        projectId: active.id,
+        geometry,
+        resolution: 256
+      });
+      if (
+        materialPreview.mimeType !== "image/png" ||
+        materialPreview.width !== 256 ||
+        materialPreview.height !== 256 ||
+        materialPreview.data.length < 32
+      ) {
+        throw new Error(`Native ${geometry} material preview contract failed`);
+      }
+      assertPreviewHasMaterial(materialPreview.data, geometry);
+    }
+    const exportDirectory = join(runtimeDirectory, "export");
+    await mkdir(exportDirectory);
+    const exportPrefix = join(exportDirectory, "native-capability-test");
+    const artifacts = await client.request("export.blender", {
       projectId: active.id,
-      geometry,
-      resolution: 256
+      prefix: exportPrefix,
+      expectedRevision: committed.revision,
+      idempotencyKey: `native-export-${process.pid}`,
+      overwrite: false
     });
     if (
-      materialPreview.mimeType !== "image/png" ||
-      materialPreview.width !== 256 ||
-      materialPreview.height !== 256 ||
-      materialPreview.data.length < 32
+      artifacts.length < 5 ||
+      artifacts.some(
+        (artifact) =>
+          typeof artifact.sha256 !== "string" ||
+          artifact.sha256.length !== 64 ||
+          artifact.sizeBytes <= 0
+      )
     ) {
-      throw new Error(`Native ${geometry} material preview contract failed`);
+      throw new Error(`Native Blender export verification failed: ${JSON.stringify(artifacts)}`);
     }
-    assertPreviewHasMaterial(materialPreview.data, geometry);
-  }
-  const exportDirectory = join(runtimeDirectory, "export");
-  await mkdir(exportDirectory);
-  const exportPrefix = join(exportDirectory, "native-capability-test");
-  const artifacts = await client.request("export.blender", {
-    projectId: active.id,
-    prefix: exportPrefix,
-    expectedRevision: committed.revision,
-    idempotencyKey: `native-export-${process.pid}`,
-    overwrite: false
-  });
-  if (
-    artifacts.length < 5 ||
-    artifacts.some(
-      (artifact) =>
-        typeof artifact.sha256 !== "string" ||
-        artifact.sha256.length !== 64 ||
-        artifact.sizeBytes <= 0
-    )
-  ) {
-    throw new Error(`Native Blender export verification failed: ${JSON.stringify(artifacts)}`);
+  } else {
+    let unavailableRejected = false;
+    try {
+      await client.request("preview.render_material_3d", {
+        projectId: active.id,
+        geometry: "sphere",
+        resolution: 256
+      });
+    } catch (error) {
+      unavailableRejected = String(error).includes("CAPABILITY_NOT_AVAILABLE");
+    }
+    if (!unavailableRejected) {
+      throw new Error("Headless 3D preview did not reject the unavailable rendering capability");
+    }
   }
   const committedConnection = committedDomain.connections[0];
   const committedNormal = committedDomain.nodes.find(
@@ -558,21 +606,23 @@ try {
   }
   const previewNode = committedDomain.nodes.find((node) => node.outputs.length > 0);
   if (!previewNode) throw new Error("Committed graph did not expose a previewable node");
-  const preview = await client.request("preview.render_node_output", {
-    projectId: active.id,
-    nodeId: previewNode.id,
-    outputPort: previewNode.outputs[0].index,
-    resolution: 512
-  });
-  const previewBytes = Buffer.from(preview.data, "base64");
-  if (
-    preview.mimeType !== "image/png" ||
-    preview.width !== 512 ||
-    preview.height !== 512 ||
-    typeof preview.data !== "string" ||
-    previewBytes.length <= 65_535
-  ) {
-    throw new Error("Native node-output preview did not cross the default WebSocket buffer");
+  if (windowedTest) {
+    const preview = await client.request("preview.render_node_output", {
+      projectId: active.id,
+      nodeId: previewNode.id,
+      outputPort: previewNode.outputs[0].index,
+      resolution: 512
+    });
+    const previewBytes = Buffer.from(preview.data, "base64");
+    if (
+      preview.mimeType !== "image/png" ||
+      preview.width !== 512 ||
+      preview.height !== 512 ||
+      typeof preview.data !== "string" ||
+      previewBytes.length <= 65_535
+    ) {
+      throw new Error("Native node-output preview did not cross the default WebSocket buffer");
+    }
   }
   const afterDeletionPlan = await client.request("graph.get_snapshot", { projectId: active.id });
   if (
@@ -625,7 +675,9 @@ try {
     throw new Error("Native patch emitted an unsupported leaf-node undo diagnostic");
   }
   process.stdout.write(
-    `Material Maker ${status.materialMakerVersion} native project creation, patch, rollback, undo, redo, save, 3D preview, and Blender export contracts passed on Godot ${status.godotVersion}.\n`
+    windowedTest
+      ? `Material Maker ${status.materialMakerVersion} native project creation, patch, rollback, undo, redo, save, 3D preview, and Blender export contracts passed on Godot ${status.godotVersion}.\n`
+      : `Material Maker ${status.materialMakerVersion} headless graph contracts passed with rendering capabilities safely disabled on Godot ${status.godotVersion}.\n`
   );
 } catch (error) {
   throw new Error(

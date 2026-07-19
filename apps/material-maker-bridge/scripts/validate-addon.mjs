@@ -32,7 +32,12 @@ for (const marker of [
   "await _restore_graph(graph, before)",
   'get_node_or_null("/root/mm_loader")',
   "_stable_native_id",
-  "do_disconnect_node"
+  "do_disconnect_node",
+  "_has_rendering_device",
+  "Blender channel render failed",
+  "_cleanup_files",
+  '"preview.material3d": graph != null and _main_window() != null and rendering_available',
+  '"export.write": editable and rendering_available'
 ]) {
   if (!adapter.includes(marker))
     throw new Error(`Native adapter is missing transaction marker: ${marker}`);

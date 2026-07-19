@@ -10,6 +10,7 @@ func get_material_maker_version() -> String:
 func get_features() -> Dictionary:
 	var graph = _current_graph()
 	var editable := _is_root_graph(graph)
+	var rendering_available := _has_rendering_device()
 	return {
 		"application.read": true,
 		"project.read": true,
@@ -19,10 +20,10 @@ func get_features() -> Dictionary:
 		"graph.write": editable,
 		"graph.transactions": editable,
 		"catalog.read": true,
-		"preview.capture": graph != null,
-		"preview.nodeOutput": graph != null,
-		"preview.material3d": graph != null and _main_window() != null,
-		"export.write": editable,
+		"preview.capture": graph != null and rendering_available,
+		"preview.nodeOutput": graph != null and rendering_available,
+		"preview.material3d": graph != null and _main_window() != null and rendering_available,
+		"export.write": editable and rendering_available,
 		"painting.read": _current_project_type() == "painting",
 		"painting.stroke": false,
 		"customNode.write": false
@@ -338,6 +339,8 @@ func render_node_output(params: Dictionary):
 		return _error(-32004, "PROJECT_NOT_FOUND")
 	if params.get("projectId") != _active_project_id():
 		return _error(-32004, "PROJECT_NOT_FOUND")
+	if !_has_rendering_device():
+		return _error(-32030, "CAPABILITY_NOT_AVAILABLE", {"reason": "Godot has no rendering device."})
 	var native := _resolve_native(params.get("nodeId", ""), {})
 	if !graph.generator.has_node(native):
 		return _error(-32011, "NODE_NOT_FOUND")
@@ -547,6 +550,9 @@ func _main_window():
 		return globals.main_window
 	return get_tree().root.find_child("MainWindow", true, false)
 
+func _has_rendering_device() -> bool:
+	return RenderingServer.get_rendering_device() != null
+
 func _current_graph():
 	var main = _main_window()
 	return main.get_current_graph_edit() if main != null and main.has_method("get_current_graph_edit") else null
@@ -640,6 +646,8 @@ func render_material_3d(params: Dictionary):
 	var main = _main_window()
 	if graph == null or main == null or params.get("projectId") != _active_project_id():
 		return _error(-32004, "PROJECT_NOT_FOUND")
+	if !_has_rendering_device():
+		return _error(-32030, "CAPABILITY_NOT_AVAILABLE", {"reason": "Godot has no rendering device."})
 	if !("preview_3d" in main) or main.preview_3d == null:
 		return _error(-32030, "CAPABILITY_NOT_AVAILABLE")
 	var geometry := str(params.get("geometry", ""))
@@ -745,25 +753,27 @@ func export_blender(params: Dictionary):
 	var graph = _current_graph()
 	if graph == null or params.get("projectId") != _active_project_id():
 		return _error(-32004, "PROJECT_NOT_FOUND")
+	if !_has_rendering_device():
+		return _error(-32030, "CAPABILITY_NOT_AVAILABLE", {"reason": "Godot has no rendering device."})
 	if params.get("expectedRevision", -1) != _revision(graph):
 		return _error(-32010, "REVISION_CONFLICT", {"actualRevision": _revision(graph)})
 	var prefix := str(params.get("prefix", "")).simplify_path()
 	if !prefix.is_absolute_path() or !DirAccess.dir_exists_absolute(prefix.get_base_dir()):
 		return _error(-32602, "A canonical absolute export prefix in an existing directory is required")
-	var suffixes := [
-		["_albedo.png", "image/png"],
-		["_rough.exr", "image/x-exr"],
-		["_metal.exr", "image/x-exr"],
-		["_normal.png", "image/png"],
-		["_displace.exr", "image/x-exr"],
-		["_sss.exr", "image/x-exr"],
-		["_emission.png", "image/png"],
-		["_occlusion.exr", "image/x-exr"]
+	var export_specs := [
+		{"input": 0, "output": 0, "suffix": "_albedo.png", "mimeType": "image/png", "format": "png"},
+		{"input": 2, "output": 13, "suffix": "_rough.exr", "mimeType": "image/x-exr", "format": "exr"},
+		{"input": 1, "output": 12, "suffix": "_metal.exr", "mimeType": "image/x-exr", "format": "exr"},
+		{"input": 4, "output": 7, "suffix": "_normal.png", "mimeType": "image/png", "format": "png"},
+		{"input": 6, "output": 8, "suffix": "_displace.exr", "mimeType": "image/x-exr", "format": "exr"},
+		{"input": 8, "output": 5, "suffix": "_sss.exr", "mimeType": "image/x-exr", "format": "exr"},
+		{"input": 3, "output": 2, "suffix": "_emission.png", "mimeType": "image/png", "format": "png"},
+		{"input": 5, "output": 9, "suffix": "_occlusion.exr", "mimeType": "image/x-exr", "format": "exr"}
 	]
 	if !params.get("overwrite", false):
-		for suffix in suffixes:
-			if FileAccess.file_exists(prefix + suffix[0]):
-				return _error(-32022, "OVERWRITE_NOT_ALLOWED", {"path": prefix + suffix[0]})
+		for spec in export_specs:
+			if FileAccess.file_exists(prefix + spec.suffix):
+				return _error(-32022, "OVERWRITE_NOT_ALLOWED", {"path": prefix + spec.suffix})
 	var key := str(params.get("idempotencyKey", ""))
 	if key.length() < 8:
 		return _error(-32602, "An idempotency key is required")
@@ -774,34 +784,70 @@ func export_blender(params: Dictionary):
 			return _error(-32602, "Idempotency key reused with different arguments")
 		return _idempotency[scoped_key].result
 	var material_node = graph.get_material_node() if graph.has_method("get_material_node") else null
-	if material_node == null or !material_node.has_method("export_material"):
+	if material_node == null or !material_node.has_method("render_output"):
 		return _error(-32020, "The active graph has no Blender-exportable Material node")
 	var graph_before := _serialize_graph(graph.top_generator)
-	var selection_before := _selection(graph)
-	await material_node.export_material(prefix, "Blender", 0, true)
-	var graph_after := _serialize_graph(graph.top_generator)
-	if _graph_hash(graph_after) != _graph_hash(graph_before):
-		if !await _restore_graph(graph, graph_before):
-			return _error(-32020, "ROLLBACK_FAILED after Blender export")
-		_set_selection(graph, selection_before, {})
+	var normalized_graph := _normalize_serialized_graph(graph_before)
+	var connected_inputs := {}
+	for connection in normalized_graph.get("connections", []):
+		if str(connection.get("to", "")) == str(material_node.name):
+			connected_inputs[int(connection.get("to_port", -1))] = true
+	var export_size := int(material_node.get_image_size()) if material_node.has_method("get_image_size") else 0
+	if export_size < 16 or export_size > 2048:
+		return _error(-32020, "Material export size must be between 16 and 2048", {"size": export_size})
+	var temporary_prefix := prefix + ".materialpilot-" + key.sha256_text().left(12)
+	var temporary_paths: Array = []
+	var pending_artifacts: Array = []
+	for spec in export_specs:
+		if !connected_inputs.has(spec.input):
+			continue
+		var image: Image = await material_node.render_output(spec.output, Vector2i(export_size, export_size))
+		if image == null or image.is_empty():
+			_cleanup_files(temporary_paths)
+			return _error(-32020, "Blender channel render failed", {"suffix": spec.suffix})
+		var temporary_path: String = temporary_prefix + spec.suffix
+		var save_error: Error = image.save_png(temporary_path) if spec.format == "png" else image.save_exr(temporary_path)
+		if save_error != OK:
+			_cleanup_files(temporary_paths)
+			return _error(-32020, "Could not write Blender export channel", {"path": temporary_path, "error": save_error})
+		temporary_paths.append(temporary_path)
+		pending_artifacts.append({"temporary": temporary_path, "final": prefix + spec.suffix, "mimeType": spec.mimeType})
+	if pending_artifacts.is_empty():
+		return _error(-32020, "Blender export has no connected Material channels")
+	for pending in pending_artifacts:
+		if FileAccess.file_exists(pending.final):
+			if !params.get("overwrite", false):
+				_cleanup_files(temporary_paths)
+				return _error(-32022, "OVERWRITE_NOT_ALLOWED", {"path": pending.final})
+			var remove_error := DirAccess.remove_absolute(pending.final)
+			if remove_error != OK:
+				_cleanup_files(temporary_paths)
+				return _error(-32020, "Could not replace Blender export artifact", {"path": pending.final, "error": remove_error})
+		var rename_error := DirAccess.rename_absolute(pending.temporary, pending.final)
+		if rename_error != OK:
+			_cleanup_files(temporary_paths)
+			return _error(-32020, "Could not publish Blender export artifact", {"path": pending.final, "error": rename_error})
 	var artifacts: Array = []
-	for suffix in suffixes:
-		var path: String = prefix + suffix[0]
-		if FileAccess.file_exists(path):
-			var file := FileAccess.open(path, FileAccess.READ)
-			if file == null:
-				return _error(-32020, "Could not verify exported artifact", {"path": path})
-			artifacts.append({
-				"path": path,
-				"mimeType": suffix[1],
-				"sizeBytes": file.get_length(),
-				"sha256": FileAccess.get_sha256(path)
-			})
-			file.close()
-	if artifacts.is_empty():
-		return _error(-32020, "Blender export produced no artifacts")
+	for pending in pending_artifacts:
+		var file := FileAccess.open(pending.final, FileAccess.READ)
+		if file == null or file.get_length() <= 0:
+			return _error(-32020, "Could not verify exported artifact", {"path": pending.final})
+		artifacts.append({
+			"path": pending.final,
+			"mimeType": pending.mimeType,
+			"sizeBytes": file.get_length(),
+			"sha256": FileAccess.get_sha256(pending.final)
+		})
+		file.close()
+	if _graph_hash(_serialize_graph(graph.top_generator)) != _graph_hash(graph_before):
+		return _error(-32020, "Blender export changed the material graph")
 	_idempotency[scoped_key] = {"hash": request_hash, "result": artifacts}
 	return artifacts
+
+func _cleanup_files(paths: Array) -> void:
+	for path in paths:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
 
 func _selection(graph) -> Array:
 	var result: Array = []
