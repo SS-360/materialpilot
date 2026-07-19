@@ -32,6 +32,6 @@
     "@materialpilot/ptex": "workspace:*",
     "@materialpilot/security": "workspace:*",
     "@materialpilot/validator": "workspace:*",
-    "commander": "^14.0.0"
+    "commander": "^15.0.0"
   }
 }
