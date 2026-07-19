@@ -27,9 +27,9 @@ describe("CLI linter", () => {
 
 describe("CLI runtime checks", () => {
   it.each([
-    ["22.11.0", false],
-    ["22.12.0", true],
-    ["v22.12.1", true],
+    ["22.12.0", false],
+    ["22.13.0", true],
+    ["v22.13.1", true],
     ["23.0.0", true],
     ["invalid", false]
   ])("checks whether Node %s satisfies the supported runtime", (version, supported) => {

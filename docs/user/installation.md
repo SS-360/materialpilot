@@ -33,7 +33,7 @@ to reconnect natively.
 
 | Component      | Supported version | Required for                                    |
 | -------------- | ----------------- | ----------------------------------------------- |
-| Node.js        | 22.12.0 or newer  | Source and packaged installs                    |
+| Node.js        | 22.13.0 or newer  | Source and packaged installs                    |
 | pnpm           | 11.9.0            | Source install only                             |
 | Material Maker | 1.7               | Live Material Maker editing                     |
 | Godot          | 4.7 stable        | Running or exporting Material Maker from source |
@@ -46,7 +46,7 @@ node --version
 pnpm --version
 ```
 
-If pnpm is missing, use the Corepack bundled with Node 22.12.0 or newer:
+If pnpm is missing, use the Corepack bundled with Node 22.13.0 or newer:
 
 ```powershell
 corepack enable

@@ -12,7 +12,7 @@ import { parsePtex, ptexToSnapshot } from "@materialpilot/ptex";
 import { validateGraph, type RunnableValidationProfile } from "@materialpilot/validator";
 
 const version = "0.1.0";
-const minimumNodeVersion = [22, 12, 0] as const;
+const minimumNodeVersion = [22, 13, 0] as const;
 
 export function isSupportedNodeVersion(version: string): boolean {
   const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);

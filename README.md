@@ -6,7 +6,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Material Maker](https://img.shields.io/badge/Material%20Maker-1.7-478CBF)](https://github.com/RodZill4/material-maker)
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF)](https://godotengine.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.12.0-339933)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.13.0-339933)](https://nodejs.org/)
 
 MaterialPilot lets MCP-compatible AI agents inspect, create, organize, validate, preview, save, and
 export real Material Maker projects. It works through Material Maker's native graph and undo APIs,
@@ -131,7 +131,7 @@ automation in a sensitive workspace.
 
 | Component      | Supported version          | Purpose                                                 |
 | -------------- | -------------------------- | ------------------------------------------------------- |
-| Node.js        | 22.12.0 or newer           | MCP server, CLI, packages, and tests                    |
+| Node.js        | 22.13.0 or newer           | MCP server, CLI, packages, and tests                    |
 | pnpm           | 11.9.0                     | Source builds and development                           |
 | Material Maker | 1.7                        | Live procedural material editing                        |
 | Godot          | 4.7 stable                 | Running or exporting Material Maker from source         |
