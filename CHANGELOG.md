@@ -27,6 +27,19 @@ All notable changes use Keep a Changelog conventions.
 
 ### Fixed
 
+- Gated node previews, 3D material previews, and Blender export on the presence of a real Godot
+  rendering device so headless sessions return `CAPABILITY_NOT_AVAILABLE` instead of invalid shader
+  output or missing-material textures.
+- Added native test preflight checks for stale installed bridge files and split renderer verification
+  into deterministic headless capability checks and GPU-backed windowed preview/export checks.
+- Made the abandoned-industrial-floor production workflow honor `MATERIALPILOT_RUNTIME_FILE`,
+  allowing isolated authenticated bridge sessions instead of forcing the default user record.
+- Replaced the Blender bridge's UI-oriented export call with bounded, project-local rendering of
+  connected Material channels, temporary-file publication, and post-write hash verification so
+  automation cannot hang on Material Maker's unrelated global preview render queue.
+- Corrected the industrial-floor Normal Map recipe to use the native direct-sampling path within
+  its supported strength range, and added decoded PNG channel-variance verification that rejects
+  effectively flat normal previews.
 - Made Godot stable node IDs byte-for-byte compatible with the TypeScript domain model.
 - Removed serialized array positions from stable connection IDs and enabled deletion by public ID.
 - Made non-deletable Material output removal fail explicitly instead of returning a successful no-op.

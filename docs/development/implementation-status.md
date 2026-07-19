@@ -8,9 +8,14 @@ MaterialPilot 0.1.0 is a tested implementation preview, not the stable 1.0 descr
 - MCP server over STDIO and authenticated loopback HTTP with 143 schema-defined tools spanning application, project, graph, catalog, node, connection, transaction, layout, PBR, preview, export, diagnostics, performance, and material workflows, plus resources and prompts.
 - Authenticated loopback WebSocket bridge for Material Maker, multi-project discovery, idempotent and rollback-safe native material creation, policy-constrained project save, canonical and named recovery snapshots, root-graph patch transactions, revision checks, selection, undo/redo, and exact failure/dry-run rollback.
 - Generated coverage for 392 unique Material Maker 1.7 node definitions, plus stable graph comments and linked remote controls.
-- Bounded in-memory PNG rendering for individual live node outputs and sphere/plane material previews, plus verified Blender-profile PBR export.
+- Renderer-gated, bounded in-memory PNG rendering for individual live node outputs and sphere/plane
+  material previews, plus project-local Blender-profile PBR export with temporary publication,
+  dimensions, sizes, and SHA-256 verification.
 - CLI doctor, catalog verification, project linting, project normalization, package scripts, CI, SBOM, checksum, release archive, fixtures, and user/developer documentation.
-- Automated validation with unit/integration tests, an official Godot 4.7 parse/handshake contract, and a full Material Maker 1.7 headless multi-node commit/rollback/undo/redo contract.
+- Automated validation with unit/integration tests, an official Godot 4.7 parse/handshake contract,
+  a Material Maker 1.7 headless multi-node commit/rollback/undo/redo contract that verifies
+  rendering capability rejection, and a GPU-backed windowed contract that rejects missing-material
+  previews and verifies Blender export.
 
 ## Capability-gated in 0.1.0
 

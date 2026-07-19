@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { inflateSync } from "node:zlib";
 
 import { NativeBackend } from "../apps/mcp-server/dist/backend.js";
 import { BridgeClient } from "../packages/bridge-protocol/dist/index.js";
@@ -10,7 +11,10 @@ const smokeMode = process.env.MATERIALPILOT_SMOKE === "1";
 const root = path.resolve(
   process.env.MATERIALPILOT_ARTIFACT_ROOT ?? "artifacts/abandoned-industrial-floor"
 );
-const bridgeRecord = path.join(process.env.USERPROFILE ?? "", ".materialpilot", "bridge.json");
+const bridgeRecord = path.resolve(
+  process.env.MATERIALPILOT_RUNTIME_FILE ??
+    path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".materialpilot", "bridge.json")
+);
 const expectedChannels = [
   "albedo",
   "roughness",
@@ -74,6 +78,72 @@ function exrDimensions(data) {
     offset = valueOffset + size;
   }
   throw new Error("OpenEXR dataWindow is missing");
+}
+function pngChannelRanges(data) {
+  let width = 0;
+  let height = 0;
+  let channels = 0;
+  const imageData = [];
+  for (let offset = 8; offset + 12 <= data.length;) {
+    const length = data.readUInt32BE(offset);
+    const type = data.toString("ascii", offset + 4, offset + 8);
+    const chunk = data.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = chunk.readUInt32BE(0);
+      height = chunk.readUInt32BE(4);
+      if (chunk[8] !== 8 || ![2, 6].includes(chunk[9])) {
+        throw new Error(`Unsupported preview PNG format: depth=${chunk[8]} color=${chunk[9]}`);
+      }
+      channels = chunk[9] === 6 ? 4 : 3;
+    } else if (type === "IDAT") {
+      imageData.push(chunk);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += length + 12;
+  }
+  const filtered = inflateSync(Buffer.concat(imageData));
+  const stride = width * channels;
+  const pixels = Buffer.alloc(stride * height);
+  const ranges = Array.from({ length: channels }, () => ({ minimum: 255, maximum: 0 }));
+  const paeth = (a, b, c) => {
+    const estimate = a + b - c;
+    const distanceA = Math.abs(estimate - a);
+    const distanceB = Math.abs(estimate - b);
+    const distanceC = Math.abs(estimate - c);
+    return distanceA <= distanceB && distanceA <= distanceC ? a : distanceB <= distanceC ? b : c;
+  };
+  let source = 0;
+  for (let y = 0; y < height; y += 1) {
+    const filter = filtered[source++];
+    const row = y * stride;
+    const previous = row - stride;
+    for (let x = 0; x < stride; x += 1) {
+      const left = x >= channels ? pixels[row + x - channels] : 0;
+      const above = y > 0 ? pixels[previous + x] : 0;
+      const upperLeft = y > 0 && x >= channels ? pixels[previous + x - channels] : 0;
+      const predictor =
+        filter === 0
+          ? 0
+          : filter === 1
+            ? left
+            : filter === 2
+              ? above
+              : filter === 3
+                ? Math.floor((left + above) / 2)
+                : filter === 4
+                  ? paeth(left, above, upperLeft)
+                  : (() => {
+                      throw new Error(`Unsupported PNG filter ${filter}`);
+                    })();
+      const value = (filtered[source++] + predictor) & 0xff;
+      pixels[row + x] = value;
+      const channel = x % channels;
+      ranges[channel].minimum = Math.min(ranges[channel].minimum, value);
+      ranges[channel].maximum = Math.max(ranges[channel].maximum, value);
+    }
+  }
+  return ranges;
 }
 function gradient(...hexColors) {
   const toColor = (hex) => ({
@@ -270,7 +340,12 @@ function graphOperations(values, initialOutputNodeId) {
     connect("Chip Depth", "output_0", "Final Height", "in2")
   );
   ops.push(
-    node("Surface Normal", "mm.filter.normal-map", 2260, -300, { size: outputSize, strength: 7.2 })
+    node("Surface Normal", "mm.filter.normal-map", 2260, -300, {
+      size: outputSize,
+      strength: 2,
+      buffer: 0,
+      param2: 0
+    })
   );
   ops.push(connect("Final Height", "output_0", "Surface Normal", "input"));
   ops.push(node("AO Occlusion", "mm.generated.math", 2260, -100, { op: 0 }));
@@ -710,6 +785,16 @@ async function main() {
             throw new Error(`Bridge export verification mismatch: ${artifact.path}`);
           if (verified.width !== 2048 || verified.height !== 2048)
             throw new Error(`Blender map is not 2048 x 2048: ${artifact.path}`);
+          if (artifact.path.endsWith("_normal.png")) {
+            const ranges = pngChannelRanges(await readFile(artifact.path));
+            if (
+              ranges[0].maximum - ranges[0].minimum < 8 ||
+              ranges[1].maximum - ranges[1].minimum < 8
+            )
+              throw new Error(
+                `Blender normal export is effectively flat: ${JSON.stringify(ranges)}`
+              );
+          }
         }
         step(`export for Blender: ${displayName}`, { artifacts: exported.length });
       }
@@ -734,15 +819,14 @@ async function main() {
           albedo: ["Final Albedo", "output"],
           roughness: ["Final Roughness", "output_0"],
           metallic: ["Metallic", "output_0"],
-          normal: ["Material Output", "normal_blender"],
+          normal: ["Surface Normal", "normal"],
           height: ["Final Height", "output_0"],
           ambient_occlusion: ["Surface AO", "output_0"]
         };
         for (const channel of expectedChannels) {
           process.stderr.write(`[material-build] rendering channel preview: ${channel}\n`);
           const [nodeName, outputPort] = outputMap[channel];
-          const nodeId =
-            channel === "normal" ? initialOutput.id : applied.temporaryIds[temp(nodeName)];
+          const nodeId = applied.temporaryIds[temp(nodeName)];
           const target = graph.nodes.find((candidate) => candidate.id === nodeId);
           if (!target) throw new Error(`Missing preview source: ${channel}`);
           const rendered = await backend.renderNodePreview(
@@ -756,6 +840,14 @@ async function main() {
           const verified = await verifyArtifact(previewPath, "channel-preview");
           if (verified.width !== previewResolution || verified.height !== previewResolution)
             throw new Error(`Unexpected channel preview dimensions: ${previewPath}`);
+          if (channel === "normal") {
+            const ranges = pngChannelRanges(await readFile(previewPath));
+            if (
+              ranges[0].maximum - ranges[0].minimum < 8 ||
+              ranges[1].maximum - ranges[1].minimum < 8
+            )
+              throw new Error(`Normal preview is effectively flat: ${JSON.stringify(ranges)}`);
+          }
         }
         step("render channel previews", { channels: expectedChannels });
       }
