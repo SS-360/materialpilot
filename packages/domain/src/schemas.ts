@@ -160,7 +160,25 @@ const nodeCreateOperationSchema = z.object({
   nodeTypeId: z.string().min(1),
   position: positionSchema,
   displayName: z.string().optional(),
-  parameters: z.record(z.string(), parameterValueSchema).optional()
+  parameters: z.record(z.string(), parameterValueSchema).optional(),
+  comment: z
+    .object({
+      title: z.string().min(1).max(120),
+      text: z.string().max(4000),
+      size: sizeSchema.default({ width: 420, height: 240 })
+    })
+    .optional(),
+  remoteControls: z
+    .array(
+      z.object({
+        name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+        label: z.string().min(1).max(120),
+        description: z.string().max(500).default(""),
+        links: z.array(z.object({ nodeId: z.string().min(1), parameter: z.string().min(1) })).min(1)
+      })
+    )
+    .max(64)
+    .optional()
 });
 const nodeDeleteOperationSchema = z.object({
   type: z.literal("node.delete"),

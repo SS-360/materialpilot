@@ -1,25 +1,25 @@
 # MCP tool reference
 
-MaterialPilot 0.1.0 negotiates **138 tools**. All tools have JSON-compatible input schemas, MCP
+MaterialPilot 0.1.0 negotiates **143 tools**. All tools have JSON-compatible input schemas, MCP
 read/write annotations, and MaterialPilot safety metadata. A0 tools are observational. A1 tools
 perform reversible in-memory project or graph mutations and require the configured permission
 policy.
 
-| Category                |   Count | Primary capability                                        |
-| ----------------------- | ------: | --------------------------------------------------------- |
-| Application             |       6 | Runtime, versions, connection, features, and limits       |
-| Project                 |      10 | Native creation, discovery, metadata, and validation      |
-| Graph observation       |      17 | Snapshots, paths, bounds, statistics, and reachability    |
-| Transactions and patch  |       8 | Plan, validate, apply, history, undo, and redo            |
-| Catalog                 |      15 | Typed descriptors, parameters, aliases, and compatibility |
-| Node                    |      24 | Observation plus atomic and batch editing                 |
-| Connection and port     |      15 | Inspection, compatibility, replace, and batch mutation    |
-| Layout                  |       7 | Alignment, distribution, grids, offsets, and centering    |
-| Material/PBR            |      12 | Outputs, channels, lineage, configuration, and validation |
-| Preview                 |       5 | Discovery and bounded native node-output PNG rendering    |
-| Diagnostics/performance |       8 | Validation views, summaries, and graph metrics            |
-| Workflow                |      11 | Baseline and five procedural material recipes             |
-| **Total**               | **138** |                                                           |
+| Category                |   Count | Primary capability                                         |
+| ----------------------- | ------: | ---------------------------------------------------------- |
+| Application             |       6 | Runtime, versions, connection, features, and limits        |
+| Project                 |      11 | Native creation, save, discovery, metadata, and validation |
+| Graph observation       |      18 | Snapshots, paths, bounds, statistics, and reachability     |
+| Transactions and patch  |       9 | Plan, validate, apply, recovery, history, undo, and redo   |
+| Catalog                 |      15 | Typed descriptors, parameters, aliases, and compatibility  |
+| Node                    |      24 | Observation plus atomic and batch editing                  |
+| Connection and port     |      15 | Inspection, compatibility, replace, and batch mutation     |
+| Layout                  |       7 | Alignment, distribution, grids, offsets, and centering     |
+| Material/PBR            |      13 | Outputs, channels, export, configuration, and validation   |
+| Preview                 |       6 | Bounded node-output and material PNG rendering             |
+| Diagnostics/performance |       8 | Validation views, summaries, and graph metrics             |
+| Workflow                |      11 | Baseline and five procedural material recipes              |
+| **Total**               | **143** |                                                            |
 
 ## Application and project
 
@@ -27,10 +27,12 @@ policy.
   `app_get_runtime_health`, `app_get_feature_matrix`
 - `project_list`, `project_get_active`, `project_create_material`, `project_validate`,
   `project_get`, `project_get_metadata`, `project_get_graphs`, `project_is_dirty`,
-  `project_get_compatibility`, `project_assert_revision`
+  `project_get_compatibility`, `project_assert_revision`, `project_save`
 
 `project_create_material` is A1 and creates a clean, active, unsaved Material Maker material tab
 with a standard Material output. It uses an idempotency key; rejected creation leaves no partial tab.
+`project_save` is A2 and requires approval, an expected revision, an idempotency key, and a
+workspace-policy-approved `.ptex` path.
 
 ## Graph observation and transactions
 
@@ -41,7 +43,7 @@ with a standard Material output. It uses an idempotency key; rejected creation l
   `graph_find_unreachable_nodes`, `graph_find_redundant_nodes`, `graph_find_expensive_chains`
 - `graph_plan_patch`, `graph_apply_patch`, `graph_undo`, `graph_redo`,
   `graph_list_transactions`, `graph_get_transaction`, `graph_estimate_patch_cost`,
-  `graph_validate_patch`
+  `graph_validate_patch`, `graph_create_named_snapshot`, `graph_list_named_snapshots`
 
 Graph mutations remain revision-checked, idempotent, atomic, validated, and rollback-safe. Layout,
 batch, PBR, and workflow tools all compile down to the same graph-patch transaction path.
@@ -78,12 +80,13 @@ batch, PBR, and workflow tools all compile down to the same graph-patch transact
 - `material_list_outputs`, `material_get_output`, `material_list_channels`,
   `material_get_channel`, `material_connect_channel`, `material_disconnect_channel`,
   `material_get_channel_lineage`, `material_validate_pbr`, `material_configure_output`,
-  `material_set_resolution`, `material_set_transparency`, `material_set_depth_scale`
+  `material_set_resolution`, `material_set_transparency`, `material_set_depth_scale`,
+  `material_export_blender`
 
 ## Preview, diagnostics, and performance
 
 - `preview_render_node_output`, `preview_get_configuration`, `preview_can_render_node`,
-  `preview_list_renderable_nodes`, `preview_list_node_outputs`
+  `preview_list_renderable_nodes`, `preview_list_node_outputs`, `preview_render_material_3d`
 - `diagnostics_validate_structural`, `diagnostics_validate_standard`,
   `diagnostics_validate_strict`, `diagnostics_validate_release`, `diagnostics_get_errors`,
   `diagnostics_get_warnings`, `diagnostics_summarize`, `performance_get_graph_metrics`
@@ -101,6 +104,6 @@ The `create` variants open a new native material tab and populate it. The `apply
 existing active root graph. They use only negotiated catalog nodes and return the same validation,
 diff, revision, and transaction evidence as lower-level patches.
 
-The longer production roadmap targets 150+ tools including export, asset libraries, custom nodes,
-mesh maps, subgraphs, and painting. Those surfaces are not registered as misleading stubs while
-their native safety and rollback contracts remain unavailable.
+The longer production roadmap targets 150+ tools including additional export profiles, asset
+libraries, custom nodes, mesh maps, subgraph mutation, and painting. Those surfaces are not
+registered as misleading stubs while their native safety and rollback contracts remain unavailable.

@@ -16,6 +16,14 @@ All notable changes use Keep a Changelog conventions.
 - Added rollback-safe, idempotent native material project creation with multi-tab project listing
   and persistent unsaved tab names.
 - Added native workflows for cracked stone, basalt, sandstone, lava, and oxidized-metal materials.
+- Expanded the negotiated MCP surface to 143 tools with policy-constrained native project save,
+  immutable named recovery snapshots, sphere/plane material previews, and verified Blender-profile
+  PBR export.
+- Added a generated Material Maker 1.7 catalog containing 392 unique native node descriptors,
+  including subgraph ports and remote-control parameters.
+- Added stable graph-patch and PTEX round trips for graph comments and linked remote controls.
+- Added an end-to-end abandoned industrial floor workflow with variants, artifact verification, and
+  smoke-test mode.
 
 ### Fixed
 
@@ -28,3 +36,5 @@ All notable changes use Keep a Changelog conventions.
   `kind/stops` values.
 - Matched Material Maker 1.7 Material port ordering and documented its writable native parameters.
 - Eliminated false validation warnings for Material and Normal Map native parameters.
+- Preserved leaf parameter updates in native Material Maker undo/redo entries and kept project IDs
+  stable when an unsaved material is first saved.

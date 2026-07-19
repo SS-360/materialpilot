@@ -363,6 +363,9 @@ export class GraphEngine extends EventEmitter {
           operation.parameters
         );
         context.snapshot.nodes.push(node);
+        if (operation.comment) node.metadata.comment = structuredClone(operation.comment);
+        if (operation.remoteControls)
+          node.metadata.remoteControls = structuredClone(operation.remoteControls);
         context.nativeNames.add(node.nativeId);
         context.changedEntityIds.add(node.id);
         if (operation.tempId) context.temporaryIds.set(operation.tempId, node.id);
@@ -546,6 +549,10 @@ export class GraphEngine extends EventEmitter {
     );
     for (const [name, value] of Object.entries(initialParameters)) {
       const parameter = descriptor.parameters.find((candidate) => candidate.name === name);
+      if (!parameter && descriptor.typeId === "mm.workflow.remote-controls") {
+        parameters[name] = structuredClone(value);
+        continue;
+      }
       if (!parameter)
         throw new MaterialPilotError(
           "PARAMETER_NOT_FOUND",

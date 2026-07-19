@@ -5,9 +5,10 @@ server to Codex, verifies the live connection, and creates a first procedural ma
 
 MaterialPilot 0.1.0 is an implementation preview for Material Maker 1.7 running on Godot 4.7.
 Live material creation, graph inspection, atomic graph edits, revision checks, dry runs, undo, and
-redo are supported through a 138-tool MCP surface. Native project open/save/close, full material
-2D/3D capture, texture export, and painting writes are not yet available. Bounded PNG rendering of
-individual live node outputs is available.
+redo are supported through a 143-tool MCP surface. Native `.ptex` save, named recovery snapshots,
+bounded node and sphere/plane material previews, and Blender-profile PBR export are available behind
+permission and workspace-path policy. Native project open/close, other export profiles, and painting
+writes are not yet available.
 
 ## How the pieces fit together
 
@@ -346,15 +347,17 @@ troubleshooting section below and restart Codex after the bridge is available.
 
 ## Create the first live texture
 
-MaterialPilot 0.1.0 can create a new unsaved native material tab, but it cannot choose a path or
-save it. In Material Maker:
+MaterialPilot 0.1.0 can create a new native material tab and save it with `project_save` to a
+workspace-policy-approved `.ptex` path. Saving requires the inspected revision, a fresh idempotency
+key, A2 approval, and explicit overwrite permission when the destination exists. In Material Maker:
 
 1. Open an existing material, or leave Material Maker running and let a `workflow_create_*` tool
    create a new material tab.
 2. Make that material the active tab.
 3. Leave Material Maker running.
 4. Paste one of the prompts below into Codex.
-5. Save manually in Material Maker with **Ctrl+S** after inspecting the result.
+5. After inspecting the result, save manually with **Ctrl+S** or use `project_save` with an approved
+   destination.
 
 The shortest creation test is:
 
@@ -424,13 +427,13 @@ instead of forcing it. Do not save or export.
 
 These examples prove graph creation and validation, not rendered appearance. Judge the material in
 Material Maker's own 2D and 3D views, adjust parameters there or through another revision-safe MCP
-patch, and save from the Material Maker UI.
+patch, and save through the UI or `project_save`.
 
 For pixel evidence from a specific graph output, ask Codex to call
 `preview_render_node_output` with the project ID, stable node ID, output name or index, and a
-resolution from 16 to 1024. This returns an in-memory PNG and does not write or export a texture
-file. Full Material Maker 2D/3D panel capture and automated before/after comparison remain later
-preview-phase work.
+resolution from 16 to 1024. Use `preview_render_material_3d` for a bounded sphere or plane preview
+from 64 to 2048 pixels. Both return in-memory PNGs and do not write a texture file. Histograms,
+arbitrary panel capture, and automated before/after comparison remain later preview-phase work.
 
 ## Run in offline reference mode
 
@@ -540,9 +543,10 @@ review the difference, plan the patch again, and apply it with the new revision.
 ### A node or port is rejected
 
 Use `catalog_search_nodes` and `catalog_get_node` before patching. MaterialPilot 0.1.0 exposes a
-deliberately small stable catalog. Unsupported nodes and ports should be reported, not guessed. For
-the tested Material Maker 1.7 Material output, the useful native input indices are 0 albedo, 2
-roughness, 4 normal, and 6 depth.
+generated catalog of 392 unique Material Maker 1.7 node definitions plus curated stable aliases.
+Unsupported nodes and ports should still be reported rather than guessed. For the tested Material
+Maker 1.7 Material output, the useful native input indices are 0 albedo, 2 roughness, 4 normal, and
+6 depth.
 
 ### Running the STDIO server appears to hang
 
@@ -553,8 +557,9 @@ MaterialPilot writes diagnostics to standard error.
 
 ### Material Maker changed but the project is unsaved
 
-This is expected in 0.1.0. Native save is capability-gated. Inspect the result and save manually
-from Material Maker. Graph mutations are registered as native undo/redo steps.
+Inspect the result, then save manually from Material Maker or call `project_save` with a canonical
+workspace-approved `.ptex` path, the current revision, an idempotency key, and A2 approval. Graph
+mutations remain registered as native undo/redo steps.
 
 ## Update or remove MaterialPilot
 
@@ -582,8 +587,10 @@ removed, close the editor, and then remove `addons\materialpilot` from the Mater
 - The native bridge uses an ephemeral 256-bit token recorded in the user-private runtime file.
 - Keep the runtime file, HTTP bearer token, project files, and local paths out of public logs.
 - MaterialPilot uses expected revisions and atomic transactions to avoid overwriting human edits.
-- Custom shader writes, community network operations, texture export, and painting mutations remain
-  disabled in this preview.
+- Blender-profile export is A3, restricted to approved export roots, and returns size and SHA-256
+  evidence for produced artifacts. Other export profiles remain disabled.
+- Custom shader writes, community network operations, and painting mutations remain disabled in
+  this preview.
 
 See [Troubleshooting](troubleshooting.md), [First material](first-material.md),
 [Implementation status](../development/implementation-status.md), and the repository

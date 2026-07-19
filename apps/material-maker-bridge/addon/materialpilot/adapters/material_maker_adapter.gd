@@ -14,13 +14,15 @@ func get_features() -> Dictionary:
 		"application.read": true,
 		"project.read": true,
 		"project.create": _main_window() != null,
+		"project.save": editable,
 		"graph.read": graph != null,
 		"graph.write": editable,
 		"graph.transactions": editable,
 		"catalog.read": true,
 		"preview.capture": graph != null,
 		"preview.nodeOutput": graph != null,
-		"export.write": false,
+		"preview.material3d": graph != null and _main_window() != null,
+		"export.write": editable,
 		"painting.read": _current_project_type() == "painting",
 		"painting.stroke": false,
 		"customNode.write": false
@@ -143,6 +145,34 @@ func get_graph_snapshot(params: Dictionary):
 		"selection": _selection(graph)
 	}
 
+func save_project(params: Dictionary):
+	var graph = _current_graph()
+	if graph == null or params.get("projectId") != _active_project_id():
+		return _error(-32004, "PROJECT_NOT_FOUND")
+	if params.get("expectedRevision", -1) != _revision(graph):
+		return _error(-32010, "REVISION_CONFLICT", {"actualRevision": _revision(graph)})
+	var path := str(params.get("path", "")).simplify_path()
+	if !path.is_absolute_path() or path.get_extension().to_lower() != "ptex":
+		return _error(-32602, "A canonical absolute .ptex path is required")
+	if !DirAccess.dir_exists_absolute(path.get_base_dir()):
+		return _error(-32602, "The project destination directory does not exist")
+	if FileAccess.file_exists(path) and !params.get("overwrite", false):
+		return _error(-32022, "OVERWRITE_NOT_ALLOWED")
+	var key := str(params.get("idempotencyKey", ""))
+	if key.length() < 8:
+		return _error(-32602, "An idempotency key is required")
+	var scoped_key := _active_project_id() + ":project-save:" + key
+	var request_hash := _hash_value(params)
+	if _idempotency.has(scoped_key):
+		if _idempotency[scoped_key].hash != request_hash:
+			return _error(-32602, "Idempotency key reused with different arguments")
+		return _idempotency[scoped_key].result
+	if !await graph.save_file(path):
+		return _error(-32020, "Material Maker failed to save the project")
+	var result := _project_summary(graph, true)
+	_idempotency[scoped_key] = {"hash": request_hash, "result": result}
+	return result
+
 func apply_graph_patch(params: Dictionary):
 	var patch: Dictionary = params.get("patch", params)
 	var graph = _current_graph()
@@ -196,11 +226,12 @@ func apply_graph_patch(params: Dictionary):
 			"hash": _graph_hash(after),
 			"serializedGraph": after
 		}
-	graph.undoredo_create_step(
+	_materialpilot_undoredo_create_step(
+		graph,
 		"MaterialPilot: " + patch.get("label", "Graph patch"),
 		graph.generator.get_hier_name(),
-		before.duplicate(true),
-		after.duplicate(true)
+		before,
+		after
 	)
 	_revisions[graph.get_instance_id()] = expected + 1
 	graph.set_need_save(true)
@@ -215,6 +246,46 @@ func apply_graph_patch(params: Dictionary):
 	}
 	_idempotency[scoped_key] = {"hash": request_hash, "result": result}
 	return result
+
+func _materialpilot_undoredo_create_step(graph, label: String, parent_path: String, before: Dictionary, after: Dictionary) -> void:
+	var clean_before: Dictionary = before.duplicate(true)
+	var clean_after: Dictionary = after.duplicate(true)
+	var undo_actions: Array = []
+	var redo_actions: Array = []
+	_extract_leaf_update_actions(clean_before, clean_after, parent_path, undo_actions, redo_actions)
+	var structural_actions: Dictionary = graph.undoredo_step_actions(parent_path, clean_before, clean_after)
+	if structural_actions.has("undo_actions"):
+		undo_actions.append_array(structural_actions.undo_actions)
+	if structural_actions.has("redo_actions"):
+		redo_actions.append_array(structural_actions.redo_actions)
+	if !undo_actions.is_empty() and !redo_actions.is_empty():
+		graph.undoredo.add(label, undo_actions, redo_actions, false)
+
+func _extract_leaf_update_actions(previous: Dictionary, next: Dictionary, parent_path: String, undo_actions: Array, redo_actions: Array) -> void:
+	if previous.get("type") != "graph" or next.get("type") != "graph":
+		return
+	var previous_nodes: Array = previous.get("nodes", [])
+	var next_nodes: Array = next.get("nodes", [])
+	for previous_node in previous_nodes:
+		var next_index := -1
+		for index in range(next_nodes.size()):
+			if next_nodes[index].get("name") == previous_node.get("name"):
+				next_index = index
+				break
+		if next_index < 0:
+			continue
+		var next_node: Dictionary = next_nodes[next_index]
+		if previous_node.get("type") != next_node.get("type"):
+			continue
+		var node_name := str(previous_node.get("name", ""))
+		var child_path := node_name if parent_path.is_empty() else parent_path + "/" + node_name
+		if previous_node.get("type") == "graph":
+			_extract_leaf_update_actions(previous_node, next_node, child_path, undo_actions, redo_actions)
+		elif previous_node.get("type") not in ["remote", "ios", "portal"] and previous_node.hash() != next_node.hash():
+			undo_actions.push_back({"type": "update_generator", "parent": parent_path, "name": node_name, "data": previous_node.duplicate(true)})
+			redo_actions.push_back({"type": "update_generator", "parent": parent_path, "name": node_name, "data": next_node.duplicate(true)})
+			next_nodes[next_index] = previous_node.duplicate(true)
+	next.nodes = next_nodes
 
 func _restore_graph(graph, serialized: Dictionary) -> bool:
 	var loader = graph.get_node_or_null("/root/mm_loader")
@@ -298,9 +369,45 @@ func _apply_operation(graph, operation: Dictionary, temporary_native_ids: Dictio
 		"node.create":
 			var data := {
 				"type": operation.get("nodeTypeId", ""),
-				"parameters": operation.get("parameters", {}),
+				"parameters": operation.get("parameters", {}).duplicate(true),
 				"node_position": operation.get("position", {"x": 0, "y": 0})
 			}
+			if operation.has("comment"):
+				var comment: Dictionary = operation.comment
+				data.title = str(comment.get("title", "Comment"))
+				data.text = str(comment.get("text", ""))
+				var comment_size: Dictionary = comment.get("size", {})
+				data.size = {
+					"x": float(comment_size.get("width", 420)),
+					"y": float(comment_size.get("height", 240))
+				}
+			if operation.has("remoteControls"):
+				var widgets: Array = []
+				for control in operation.remoteControls:
+					var linked_widgets: Array = []
+					var links: Array = control.get("links", [])
+					for link in links:
+						linked_widgets.append({
+							"node": _resolve_native(link.get("nodeId", ""), temporary_native_ids),
+							"widget": str(link.get("parameter", ""))
+						})
+					if !links.is_empty():
+						var first_link: Dictionary = links[0]
+						var first_native := _resolve_native(first_link.get("nodeId", ""), temporary_native_ids)
+						var first_parameter := str(first_link.get("parameter", ""))
+						if graph.generator.has_node(first_native):
+							var target_generator = graph.generator.get_node(first_native)
+							if target_generator.parameters.has(first_parameter):
+								data.parameters[str(control.get("name", ""))] = target_generator.get_parameter(first_parameter)
+					widgets.append({
+						"name": str(control.get("name", "")),
+						"label": str(control.get("label", "")),
+						"shortdesc": str(control.get("label", "")),
+						"longdesc": str(control.get("description", "")),
+						"type": "linked_control",
+						"linked_widgets": linked_widgets
+					})
+				data.widgets = widgets
 			var nodes: Array = await graph.do_create_nodes(data, Vector2.ZERO)
 			if nodes.is_empty():
 				return _error(-32020, "Could not create node")
@@ -456,18 +563,19 @@ func _current_project_type() -> String:
 	return main.get_current_mode() if main != null and main.has_method("get_current_mode") else "unknown"
 
 func _project_id(project) -> String:
+	if project.has_meta("materialpilot_project_id"):
+		return str(project.get_meta("materialpilot_project_id"))
 	var basis := str(project.get_instance_id())
 	if "save_path" in project and !project.save_path.is_empty():
 		basis = project.save_path
-	return "mmpr_native_" + basis.sha256_text().left(16)
+	var project_id := "mmpr_native_" + basis.sha256_text().left(16)
+	project.set_meta("materialpilot_project_id", project_id)
+	return project_id
 
 func _active_project_id() -> String:
 	var project = _current_project()
 	if project == null:
 		return ""
-	var graph = _current_graph()
-	if graph != null and "save_path" in graph and !graph.save_path.is_empty():
-		return "mmpr_native_" + graph.save_path.sha256_text().left(16)
 	return _project_id(project)
 
 func _node_id(graph, native_name: String) -> String:
@@ -526,6 +634,174 @@ func _project_summary(project, active: bool) -> Dictionary:
 		"dirty": graph.need_save if graph != null and "need_save" in graph else false,
 		"active": active
 	}
+
+func render_material_3d(params: Dictionary):
+	var graph = _current_graph()
+	var main = _main_window()
+	if graph == null or main == null or params.get("projectId") != _active_project_id():
+		return _error(-32004, "PROJECT_NOT_FOUND")
+	if !("preview_3d" in main) or main.preview_3d == null:
+		return _error(-32030, "CAPABILITY_NOT_AVAILABLE")
+	var geometry := str(params.get("geometry", ""))
+	var model_name := "Sphere" if geometry == "sphere" else "Plane" if geometry == "plane" else ""
+	if model_name.is_empty():
+		return _error(-32602, "Geometry must be sphere or plane")
+	var resolution := int(params.get("resolution", 1024))
+	if resolution < 64 or resolution > 2048:
+		return _error(-32602, "3D preview resolution must be between 64 and 2048")
+	var preview = main.preview_3d
+	var previous_model: int = preview.current_object.get_index()
+	var viewport = preview.get_node_or_null("MaterialPreview")
+	if viewport == null or !(viewport is SubViewport):
+		return _error(-32030, "CAPABILITY_NOT_AVAILABLE")
+	var previous_size: Vector2i = viewport.size
+	var previous_stretch: bool = preview.stretch
+	if !await _wait_for_preview_mesh(preview.current_object):
+		return _error(-32020, "The current preview geometry did not finish rendering")
+	var model = preview.objects.get_node_or_null(model_name)
+	if model == null:
+		return _error(-32030, "CAPABILITY_NOT_AVAILABLE", {"reason": "Preview geometry is unavailable."})
+	var model_id: int = model.get_index()
+	var material_generator = graph.top_generator.get_node_or_null("Material")
+	if material_generator == null or !material_generator.has_method("render_output"):
+		return _error(-32030, "CAPABILITY_NOT_AVAILABLE", {"reason": "Material output is unavailable."})
+	var output_indices := {
+		"albedo": 0,
+		"normal": 7,
+		"ambient_occlusion": 9,
+		"metallic": 12,
+		"roughness": 13
+	}
+	var textures: Dictionary = {}
+	for channel in output_indices:
+		var rendered: Image = await material_generator.render_output(output_indices[channel], Vector2i(resolution, resolution))
+		if rendered == null or rendered.is_empty():
+			return _error(-32020, "3D preview channel render failed", {"channel": channel})
+		textures[channel] = ImageTexture.create_from_image(rendered)
+	var baked_material := StandardMaterial3D.new()
+	baked_material.albedo_texture = textures.albedo
+	baked_material.metallic = 1.0
+	baked_material.metallic_texture = textures.metallic
+	baked_material.metallic_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+	baked_material.roughness = 1.0
+	baked_material.roughness_texture = textures.roughness
+	baked_material.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+	baked_material.normal_enabled = true
+	baked_material.normal_texture = textures.normal
+	baked_material.ao_enabled = true
+	baked_material.ao_texture = textures.ambient_occlusion
+	baked_material.ao_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+	preview.stretch = false
+	viewport.size = Vector2i(resolution, resolution)
+	preview.set_model(model_id)
+	if !await _wait_for_preview_mesh(model):
+		viewport.size = previous_size
+		preview.stretch = previous_stretch
+		preview.set_model(previous_model)
+		return _error(-32020, "The requested preview geometry did not finish rendering")
+	var previous_mesh = model.mesh
+	var using_temporary_plane := false
+	if geometry == "plane":
+		var fallback_plane := PlaneMesh.new()
+		fallback_plane.size = Vector2(2, 2)
+		model.mesh = fallback_plane
+		using_temporary_plane = true
+	var previous_material_override = preview.current_object.material_override
+	preview.current_object.material_override = baked_material
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var image: Image = viewport.get_texture().get_image()
+	preview.current_object.material_override = previous_material_override
+	if using_temporary_plane:
+		model.mesh = previous_mesh
+	viewport.size = previous_size
+	preview.stretch = previous_stretch
+	preview.set_model(previous_model)
+	await _wait_for_preview_mesh(preview.current_object)
+	if image == null or image.is_empty():
+		return _error(-32020, "3D preview capture returned no image")
+	var png := image.save_png_to_buffer()
+	if png.is_empty() or png.size() > 8 * 1024 * 1024:
+		return _error(-32021, "3D preview PNG exceeds the bridge response limit")
+	return {
+		"mimeType": "image/png",
+		"data": Marshalls.raw_to_base64(png),
+		"width": image.get_width(),
+		"height": image.get_height()
+	}
+
+func _wait_for_preview_mesh(model) -> bool:
+	if !("updating" in model):
+		return true
+	for _attempt in range(600):
+		if !model.updating:
+			return true
+		await get_tree().process_frame
+	return false
+
+func export_blender(params: Dictionary):
+	var graph = _current_graph()
+	if graph == null or params.get("projectId") != _active_project_id():
+		return _error(-32004, "PROJECT_NOT_FOUND")
+	if params.get("expectedRevision", -1) != _revision(graph):
+		return _error(-32010, "REVISION_CONFLICT", {"actualRevision": _revision(graph)})
+	var prefix := str(params.get("prefix", "")).simplify_path()
+	if !prefix.is_absolute_path() or !DirAccess.dir_exists_absolute(prefix.get_base_dir()):
+		return _error(-32602, "A canonical absolute export prefix in an existing directory is required")
+	var suffixes := [
+		["_albedo.png", "image/png"],
+		["_rough.exr", "image/x-exr"],
+		["_metal.exr", "image/x-exr"],
+		["_normal.png", "image/png"],
+		["_displace.exr", "image/x-exr"],
+		["_sss.exr", "image/x-exr"],
+		["_emission.png", "image/png"],
+		["_occlusion.exr", "image/x-exr"]
+	]
+	if !params.get("overwrite", false):
+		for suffix in suffixes:
+			if FileAccess.file_exists(prefix + suffix[0]):
+				return _error(-32022, "OVERWRITE_NOT_ALLOWED", {"path": prefix + suffix[0]})
+	var key := str(params.get("idempotencyKey", ""))
+	if key.length() < 8:
+		return _error(-32602, "An idempotency key is required")
+	var scoped_key := _active_project_id() + ":blender-export:" + key
+	var request_hash := _hash_value(params)
+	if _idempotency.has(scoped_key):
+		if _idempotency[scoped_key].hash != request_hash:
+			return _error(-32602, "Idempotency key reused with different arguments")
+		return _idempotency[scoped_key].result
+	var material_node = graph.get_material_node() if graph.has_method("get_material_node") else null
+	if material_node == null or !material_node.has_method("export_material"):
+		return _error(-32020, "The active graph has no Blender-exportable Material node")
+	var graph_before := _serialize_graph(graph.top_generator)
+	var selection_before := _selection(graph)
+	await material_node.export_material(prefix, "Blender", 0, true)
+	var graph_after := _serialize_graph(graph.top_generator)
+	if _graph_hash(graph_after) != _graph_hash(graph_before):
+		if !await _restore_graph(graph, graph_before):
+			return _error(-32020, "ROLLBACK_FAILED after Blender export")
+		_set_selection(graph, selection_before, {})
+	var artifacts: Array = []
+	for suffix in suffixes:
+		var path: String = prefix + suffix[0]
+		if FileAccess.file_exists(path):
+			var file := FileAccess.open(path, FileAccess.READ)
+			if file == null:
+				return _error(-32020, "Could not verify exported artifact", {"path": path})
+			artifacts.append({
+				"path": path,
+				"mimeType": suffix[1],
+				"sizeBytes": file.get_length(),
+				"sha256": FileAccess.get_sha256(path)
+			})
+			file.close()
+	if artifacts.is_empty():
+		return _error(-32020, "Blender export produced no artifacts")
+	_idempotency[scoped_key] = {"hash": request_hash, "result": artifacts}
+	return artifacts
 
 func _selection(graph) -> Array:
 	var result: Array = []

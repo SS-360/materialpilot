@@ -23,6 +23,11 @@ import { validateGraph } from "@materialpilot/validator";
 
 export type Awaitable<T> = T | Promise<T>;
 
+function configuredTimeout(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 5_000 && value <= 900_000 ? value : fallback;
+}
+
 export type AppStatus = {
   running: boolean;
   bridgeConnected: boolean;
@@ -45,6 +50,27 @@ export type PreviewImage = {
   revision: number;
 };
 
+export type MaterialPreviewImage = Omit<PreviewImage, "nodeId" | "outputPort"> & {
+  geometry: "sphere" | "plane";
+};
+
+export type NamedSnapshot = {
+  id: string;
+  name: string;
+  projectId: string;
+  revision: number;
+  hash: string;
+  createdAt: string;
+  snapshot: GraphSnapshot;
+};
+
+export type ExportArtifact = {
+  path: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+};
+
 export type MaterialBackend = {
   readonly catalog: NodeCatalog;
   readonly permissionMode: PermissionMode;
@@ -53,6 +79,13 @@ export type MaterialBackend = {
   listProjects(): Awaitable<Project[]>;
   activeProject(): Awaitable<Project | null>;
   createMaterialProject(name: string, idempotencyKey?: string): Awaitable<Project>;
+  saveProject(
+    projectId: string,
+    path: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+    overwrite: boolean
+  ): Awaitable<Project>;
   getSnapshot(projectId: string): Awaitable<GraphSnapshot>;
   getSummary(projectId: string): Awaitable<GraphSummary>;
   validate(
@@ -69,6 +102,20 @@ export type MaterialBackend = {
     outputPort: string | number,
     resolution: number
   ): Awaitable<PreviewImage>;
+  renderMaterialPreview(
+    projectId: string,
+    geometry: "sphere" | "plane",
+    resolution: number
+  ): Awaitable<MaterialPreviewImage>;
+  createNamedSnapshot(projectId: string, name: string): Awaitable<NamedSnapshot>;
+  listNamedSnapshots(projectId: string): Awaitable<NamedSnapshot[]>;
+  exportBlender(
+    projectId: string,
+    prefix: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+    overwrite: boolean
+  ): Awaitable<ExportArtifact[]>;
   listTransactions(projectId: string): Awaitable<Transaction[]>;
   searchCatalog(filter: CatalogSearch): NodeTypeDescriptor[];
 };
@@ -95,6 +142,7 @@ export class NativeBackend implements MaterialBackend {
   readonly permissionMode: PermissionMode;
   readonly #client: BridgeClient;
   readonly #manifest: BridgeInitializeResult;
+  readonly #namedSnapshots = new Map<string, NamedSnapshot[]>();
 
   constructor(
     client: BridgeClient,
@@ -155,6 +203,21 @@ export class NativeBackend implements MaterialBackend {
       15_000
     )) as Record<string, unknown>;
     return this.#normalizeProject(project);
+  }
+
+  async saveProject(
+    projectId: string,
+    path: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+    overwrite: boolean
+  ): Promise<Project> {
+    const value = (await this.#client.request(
+      "project.save",
+      { projectId, path, expectedRevision, idempotencyKey, overwrite },
+      60_000
+    )) as Record<string, unknown>;
+    return this.#normalizeProject(value);
   }
 
   async getSnapshot(projectId: string): Promise<GraphSnapshot> {
@@ -252,7 +315,7 @@ export class NativeBackend implements MaterialBackend {
         outputPort: port.index,
         resolution
       },
-      60_000
+      configuredTimeout("MATERIALPILOT_PREVIEW_TIMEOUT_MS", 180_000)
     )) as Omit<PreviewImage, "nodeId" | "outputPort" | "revision">;
     return {
       ...response,
@@ -260,6 +323,58 @@ export class NativeBackend implements MaterialBackend {
       outputPort: port.index,
       revision: snapshot.revision
     };
+  }
+
+  async renderMaterialPreview(
+    projectId: string,
+    geometry: "sphere" | "plane",
+    resolution: number
+  ): Promise<MaterialPreviewImage> {
+    const snapshot = await this.getSnapshot(projectId);
+    const response = (await this.#client.request(
+      "preview.render_material_3d",
+      { projectId, geometry, resolution },
+      configuredTimeout("MATERIALPILOT_PREVIEW_TIMEOUT_MS", 180_000)
+    )) as Omit<MaterialPreviewImage, "geometry" | "revision">;
+    return { ...response, geometry, revision: snapshot.revision };
+  }
+
+  async createNamedSnapshot(projectId: string, name: string): Promise<NamedSnapshot> {
+    const snapshot = await this.getSnapshot(projectId);
+    const record: NamedSnapshot = {
+      id: `mmsn_${randomUUID().replaceAll("-", "")}`,
+      name,
+      projectId,
+      revision: snapshot.revision,
+      hash: snapshot.hash,
+      createdAt: new Date().toISOString(),
+      snapshot: structuredClone(snapshot)
+    };
+    const records = this.#namedSnapshots.get(projectId) ?? [];
+    if (records.some((candidate) => candidate.name === name)) {
+      throw new MaterialPilotError("INVALID_REQUEST", `Snapshot name already exists: ${name}`);
+    }
+    records.push(record);
+    this.#namedSnapshots.set(projectId, records);
+    return structuredClone(record);
+  }
+
+  listNamedSnapshots(projectId: string): NamedSnapshot[] {
+    return structuredClone(this.#namedSnapshots.get(projectId) ?? []);
+  }
+
+  async exportBlender(
+    projectId: string,
+    prefix: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+    overwrite: boolean
+  ): Promise<ExportArtifact[]> {
+    return (await this.#client.request(
+      "export.blender",
+      { projectId, prefix, expectedRevision, idempotencyKey, overwrite },
+      configuredTimeout("MATERIALPILOT_EXPORT_TIMEOUT_MS", 900_000)
+    )) as ExportArtifact[];
   }
 
   listTransactions(): Transaction[] {
@@ -306,6 +421,17 @@ export class NativeBackend implements MaterialBackend {
         return {
           ...operation,
           nodeTypeId: descriptor.nativeId,
+          ...(operation.remoteControls
+            ? {
+                remoteControls: operation.remoteControls.map((control) => ({
+                  ...control,
+                  links: control.links.map((link) => ({
+                    ...link,
+                    nodeId: resolveNode(link.nodeId)
+                  }))
+                }))
+              }
+            : {}),
           ...(operation.parameters
             ? {
                 parameters: Object.fromEntries(
@@ -466,6 +592,7 @@ export class InMemoryBackend implements MaterialBackend {
   readonly engine: GraphEngine;
   readonly permissionMode: PermissionMode;
   readonly #projectCreations = new Map<string, { name: string; project: Project }>();
+  readonly #namedSnapshots = new Map<string, NamedSnapshot[]>();
 
   constructor(options: { engine?: GraphEngine; permissionMode?: PermissionMode } = {}) {
     this.engine = options.engine ?? new GraphEngine();
@@ -544,6 +671,12 @@ export class InMemoryBackend implements MaterialBackend {
     if (idempotencyKey) this.#projectCreations.set(idempotencyKey, { name, project });
     return project;
   }
+  saveProject(): Project {
+    throw new MaterialPilotError(
+      "CAPABILITY_NOT_AVAILABLE",
+      "Project save requires the native Material Maker bridge."
+    );
+  }
   getSnapshot(projectId: string) {
     return this.engine.getSnapshot(projectId);
   }
@@ -569,6 +702,40 @@ export class InMemoryBackend implements MaterialBackend {
     throw new MaterialPilotError(
       "CAPABILITY_NOT_AVAILABLE",
       "Node-output preview requires the native Material Maker bridge."
+    );
+  }
+  renderMaterialPreview(): MaterialPreviewImage {
+    throw new MaterialPilotError(
+      "CAPABILITY_NOT_AVAILABLE",
+      "3D material preview requires the native Material Maker bridge."
+    );
+  }
+  createNamedSnapshot(projectId: string, name: string): NamedSnapshot {
+    const snapshot = this.engine.getSnapshot(projectId);
+    const record: NamedSnapshot = {
+      id: `mmsn_${randomUUID().replaceAll("-", "")}`,
+      name,
+      projectId,
+      revision: snapshot.revision,
+      hash: snapshot.hash,
+      createdAt: new Date().toISOString(),
+      snapshot: structuredClone(snapshot)
+    };
+    const records = this.#namedSnapshots.get(projectId) ?? [];
+    if (records.some((candidate) => candidate.name === name)) {
+      throw new MaterialPilotError("INVALID_REQUEST", `Snapshot name already exists: ${name}`);
+    }
+    records.push(record);
+    this.#namedSnapshots.set(projectId, records);
+    return structuredClone(record);
+  }
+  listNamedSnapshots(projectId: string): NamedSnapshot[] {
+    return structuredClone(this.#namedSnapshots.get(projectId) ?? []);
+  }
+  exportBlender(): ExportArtifact[] {
+    throw new MaterialPilotError(
+      "CAPABILITY_NOT_AVAILABLE",
+      "Blender export requires the native Material Maker bridge."
     );
   }
   listTransactions(projectId: string) {

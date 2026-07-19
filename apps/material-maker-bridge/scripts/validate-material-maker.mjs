@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
+import { inflateSync } from "node:zlib";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const repository = resolve(root, "../..");
@@ -27,8 +28,8 @@ await mkdir(userDataDirectory, { recursive: true });
 const output = { value: "" };
 const applicationArgs =
   process.env.MATERIALPILOT_WINDOWED_TEST === "1"
-    ? ["--path", materialMaker, "--position", "-10000,-10000", "--", "--no-splash"]
-    : ["--headless", "--path", materialMaker, "--", "--no-splash"];
+    ? ["--path", materialMaker, "--position", "-10000,-10000", "--no-splash"]
+    : ["--headless", "--path", materialMaker, "--no-splash"];
 const child = spawn(godot, applicationArgs, {
   env: {
     ...process.env,
@@ -78,9 +79,93 @@ function semanticGraph(value) {
   return graph;
 }
 
+function decodePngPixels(encoded) {
+  const png = Buffer.from(encoded, "base64");
+  if (png.toString("ascii", 1, 4) !== "PNG") throw new Error("Preview is not a PNG");
+  let width = 0;
+  let height = 0;
+  let channels = 0;
+  const imageData = [];
+  for (let offset = 8; offset + 12 <= png.length;) {
+    const length = png.readUInt32BE(offset);
+    const type = png.toString("ascii", offset + 4, offset + 8);
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      if (data[8] !== 8 || ![2, 6].includes(data[9])) {
+        throw new Error(`Unsupported preview PNG format: depth=${data[8]} color=${data[9]}`);
+      }
+      channels = data[9] === 6 ? 4 : 3;
+    } else if (type === "IDAT") {
+      imageData.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += length + 12;
+  }
+  const filtered = inflateSync(Buffer.concat(imageData));
+  const stride = width * channels;
+  const pixels = Buffer.alloc(stride * height);
+  const paeth = (a, b, c) => {
+    const estimate = a + b - c;
+    const distanceA = Math.abs(estimate - a);
+    const distanceB = Math.abs(estimate - b);
+    const distanceC = Math.abs(estimate - c);
+    return distanceA <= distanceB && distanceA <= distanceC ? a : distanceB <= distanceC ? b : c;
+  };
+  let source = 0;
+  for (let y = 0; y < height; y += 1) {
+    const filter = filtered[source++];
+    const row = y * stride;
+    const previous = row - stride;
+    for (let x = 0; x < stride; x += 1) {
+      const left = x >= channels ? pixels[row + x - channels] : 0;
+      const above = y > 0 ? pixels[previous + x] : 0;
+      const upperLeft = y > 0 && x >= channels ? pixels[previous + x - channels] : 0;
+      const predictor =
+        filter === 0
+          ? 0
+          : filter === 1
+            ? left
+            : filter === 2
+              ? above
+              : filter === 3
+                ? Math.floor((left + above) / 2)
+                : filter === 4
+                  ? paeth(left, above, upperLeft)
+                  : (() => {
+                      throw new Error(`Unsupported PNG filter ${filter}`);
+                    })();
+      pixels[row + x] = (filtered[source++] + predictor) & 0xff;
+    }
+  }
+  return { width, height, channels, pixels };
+}
+
+function assertPreviewHasMaterial(encoded, geometry) {
+  const { channels, pixels } = decodePngPixels(encoded);
+  let colored = 0;
+  let missingMagenta = 0;
+  for (let offset = 0; offset < pixels.length; offset += channels) {
+    const red = pixels[offset];
+    const green = pixels[offset + 1];
+    const blue = pixels[offset + 2];
+    const alpha = channels === 4 ? pixels[offset + 3] : 255;
+    if (alpha < 32 || (red > 245 && green > 245 && blue > 245)) continue;
+    colored += 1;
+    if (red > 170 && blue > 170 && green < 120 && red - green > 70 && blue - green > 70) {
+      missingMagenta += 1;
+    }
+  }
+  if (colored < 128 || missingMagenta / colored > 0.65) {
+    throw new Error(`Native ${geometry} preview is empty or uses the missing-material fallback`);
+  }
+}
+
 let client;
 try {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
     if (child.exitCode !== null) {
       throw new Error(`Material Maker exited early (${child.exitCode}):\n${output.value}`);
     }
@@ -88,7 +173,7 @@ try {
       await access(runtimeFile);
       break;
     } catch {
-      await delay(50);
+      await delay(100);
     }
   }
   await readFile(runtimeFile, "utf8");
@@ -241,6 +326,34 @@ try {
       parameters: { strength: 1 }
     },
     {
+      type: "node.create",
+      tempId: "stage_comment",
+      nodeTypeId: "comment",
+      position: { x: -80, y: -180 },
+      comment: {
+        title: "Surface stage",
+        text: "Organized native graph documentation",
+        size: { width: 720, height: 520 }
+      }
+    },
+    {
+      type: "node.create",
+      tempId: "controls",
+      nodeTypeId: "remote",
+      position: { x: -80, y: 380 },
+      remoteControls: [
+        {
+          name: "surface_scale",
+          label: "Surface Scale",
+          description: "Controls the native Perlin scale",
+          links: [
+            { nodeId: "height", parameter: "scale_x" },
+            { nodeId: "height", parameter: "scale_y" }
+          ]
+        }
+      ]
+    },
+    {
       type: "connection.create",
       fromNodeId: "height",
       fromPort: "output",
@@ -253,6 +366,41 @@ try {
       fromPort: "output",
       toNodeId: "normal",
       toPort: "input"
+    },
+    {
+      type: "connection.create",
+      fromNodeId: "albedo",
+      fromPort: 0,
+      toNodeId: initialMaterial.id,
+      toPort: 0
+    },
+    {
+      type: "connection.create",
+      fromNodeId: "height",
+      fromPort: 0,
+      toNodeId: initialMaterial.id,
+      toPort: 2
+    },
+    {
+      type: "connection.create",
+      fromNodeId: "normal",
+      fromPort: 0,
+      toNodeId: initialMaterial.id,
+      toPort: 4
+    },
+    {
+      type: "connection.create",
+      fromNodeId: "height",
+      fromPort: 0,
+      toNodeId: initialMaterial.id,
+      toPort: 5
+    },
+    {
+      type: "connection.create",
+      fromNodeId: "height",
+      fromPort: 0,
+      toNodeId: initialMaterial.id,
+      toPort: 6
     }
   ];
   const planned = await client.request("graph.apply_patch", {
@@ -271,19 +419,28 @@ try {
     throw new Error("Native dry-run transaction contract failed");
   }
   const plannedPerlin = planned.serializedGraph.nodes.find((node) => node.type === "perlin");
+  const plannedComment = planned.serializedGraph.nodes.find((node) => node.type === "comment");
+  const plannedControls = planned.serializedGraph.nodes.find((node) => node.type === "remote");
   if (
-    planned.serializedGraph.nodes.length !== snapshot.serializedGraph.nodes.length + 3 ||
+    planned.serializedGraph.nodes.length !== snapshot.serializedGraph.nodes.length + 5 ||
     planned.serializedGraph.connections.length !==
-      snapshot.serializedGraph.connections.length + 2 ||
+      snapshot.serializedGraph.connections.length + 7 ||
     plannedPerlin?.parameters?.scale_x !== 8 ||
-    plannedPerlin?.parameters?.scale_y !== 8
+    plannedPerlin?.parameters?.scale_y !== 8 ||
+    plannedComment?.title !== "Surface stage" ||
+    plannedComment?.text !== "Organized native graph documentation" ||
+    plannedComment?.size?.x !== 720 ||
+    plannedControls?.widgets?.[0]?.name !== "surface_scale" ||
+    plannedControls?.widgets?.[0]?.linked_widgets?.length !== 2
   ) {
-    throw new Error("Native multi-node patch did not preserve nodes, connections, and parameters");
+    throw new Error(
+      `Native multi-node patch did not preserve nodes, connections, parameters, comments, and controls: ${JSON.stringify({ nodeDelta: planned.serializedGraph.nodes.length - snapshot.serializedGraph.nodes.length, connectionDelta: planned.serializedGraph.connections.length - snapshot.serializedGraph.connections.length, plannedPerlin, plannedComment, plannedControls })}`
+    );
   }
   const plannedDomain = ptexToSnapshot(planned.serializedGraph, active.id, {
     revision: planned.revision
   });
-  for (const tempId of ["height", "albedo", "normal"]) {
+  for (const tempId of ["height", "albedo", "normal", "stage_comment", "controls"]) {
     const nativeName = planned.temporaryNativeIds?.[tempId];
     const node = plannedDomain.nodes.find((candidate) => candidate.nativeId === nativeName);
     if (!node || planned.temporaryIds?.[tempId] !== node.id) {
@@ -319,6 +476,55 @@ try {
   const committedDomain = ptexToSnapshot(committed.serializedGraph, active.id, {
     revision: committed.revision
   });
+  const savedPath = join(runtimeDirectory, "native-capability-test.ptex");
+  const saved = await client.request("project.save", {
+    projectId: active.id,
+    path: savedPath,
+    expectedRevision: committed.revision,
+    idempotencyKey: `native-save-${process.pid}`,
+    overwrite: false
+  });
+  await access(savedPath);
+  if (resolve(saved.path) !== resolve(savedPath) || saved.dirty !== false) {
+    throw new Error(`Native project save contract failed: ${JSON.stringify(saved)}`);
+  }
+  for (const geometry of ["sphere", "plane"]) {
+    const materialPreview = await client.request("preview.render_material_3d", {
+      projectId: active.id,
+      geometry,
+      resolution: 256
+    });
+    if (
+      materialPreview.mimeType !== "image/png" ||
+      materialPreview.width !== 256 ||
+      materialPreview.height !== 256 ||
+      materialPreview.data.length < 32
+    ) {
+      throw new Error(`Native ${geometry} material preview contract failed`);
+    }
+    assertPreviewHasMaterial(materialPreview.data, geometry);
+  }
+  const exportDirectory = join(runtimeDirectory, "export");
+  await mkdir(exportDirectory);
+  const exportPrefix = join(exportDirectory, "native-capability-test");
+  const artifacts = await client.request("export.blender", {
+    projectId: active.id,
+    prefix: exportPrefix,
+    expectedRevision: committed.revision,
+    idempotencyKey: `native-export-${process.pid}`,
+    overwrite: false
+  });
+  if (
+    artifacts.length < 5 ||
+    artifacts.some(
+      (artifact) =>
+        typeof artifact.sha256 !== "string" ||
+        artifact.sha256.length !== 64 ||
+        artifact.sizeBytes <= 0
+    )
+  ) {
+    throw new Error(`Native Blender export verification failed: ${JSON.stringify(artifacts)}`);
+  }
   const committedConnection = committedDomain.connections[0];
   const committedNormal = committedDomain.nodes.find(
     (node) => node.typeId === "mm.filter.normal-map"
@@ -356,16 +562,17 @@ try {
     projectId: active.id,
     nodeId: previewNode.id,
     outputPort: previewNode.outputs[0].index,
-    resolution: 64
+    resolution: 512
   });
+  const previewBytes = Buffer.from(preview.data, "base64");
   if (
     preview.mimeType !== "image/png" ||
-    preview.width !== 64 ||
-    preview.height !== 64 ||
+    preview.width !== 512 ||
+    preview.height !== 512 ||
     typeof preview.data !== "string" ||
-    preview.data.length < 32
+    previewBytes.length <= 65_535
   ) {
-    throw new Error("Native node-output preview contract failed");
+    throw new Error("Native node-output preview did not cross the default WebSocket buffer");
   }
   const afterDeletionPlan = await client.request("graph.get_snapshot", { projectId: active.id });
   if (
@@ -410,8 +617,15 @@ try {
   if (restoreDifference || restored.revision !== redone.revision + 1) {
     throw new Error(`Native final restore contract failed: ${JSON.stringify(restoreDifference)}`);
   }
+  await delay(100);
+  if (
+    output.value.includes("Unsupported node type") &&
+    output.value.includes("undoredo_step_actions")
+  ) {
+    throw new Error("Native patch emitted an unsupported leaf-node undo diagnostic");
+  }
   process.stdout.write(
-    `Material Maker ${status.materialMakerVersion} native project creation, patch, rollback, undo, redo, and preview contracts passed on Godot ${status.godotVersion}.\n`
+    `Material Maker ${status.materialMakerVersion} native project creation, patch, rollback, undo, redo, save, 3D preview, and Blender export contracts passed on Godot ${status.godotVersion}.\n`
   );
 } catch (error) {
   throw new Error(

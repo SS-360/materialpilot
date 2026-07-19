@@ -32,6 +32,57 @@ function createPatch(engine: GraphEngine, projectId: string, key: string) {
 }
 
 describe("GraphEngine transactions", () => {
+  it("keeps comments and exposed-control metadata inside atomic graph patches", () => {
+    const engine = new GraphEngine();
+    const project = engine.createMaterialProject("Documented");
+    const result = engine.applyPatch({
+      patchVersion: "1",
+      projectId: project.id,
+      expectedRevision: 0,
+      idempotencyKey: "documented-controls-key",
+      label: "Document and expose controls",
+      dryRun: false,
+      validationPolicy: "structural",
+      operations: [
+        {
+          type: "node.create",
+          tempId: "noise",
+          nodeTypeId: "mm.noise.perlin",
+          position: { x: 0, y: 0 }
+        },
+        {
+          type: "node.create",
+          nodeTypeId: "mm.workflow.comment",
+          position: { x: -100, y: -100 },
+          comment: {
+            title: "Concrete base",
+            text: "Tileable macro and micro breakup.",
+            size: { width: 420, height: 240 }
+          }
+        },
+        {
+          type: "node.create",
+          nodeTypeId: "mm.workflow.remote-controls",
+          position: { x: -300, y: 0 },
+          parameters: { concrete_scale: 8 },
+          remoteControls: [
+            {
+              name: "concrete_scale",
+              label: "Concrete scale",
+              description: "Controls the tileable concrete frequency.",
+              links: [{ nodeId: "noise", parameter: "scale_x" }]
+            }
+          ]
+        }
+      ]
+    });
+    expect(
+      result.snapshot.nodes.find((node) => node.typeId === "mm.workflow.comment")?.metadata
+    ).toHaveProperty("comment.title", "Concrete base");
+    expect(
+      result.snapshot.nodes.find((node) => node.typeId === "mm.workflow.remote-controls")?.metadata
+    ).toHaveProperty("remoteControls.0.name", "concrete_scale");
+  });
   it("applies a multi-operation patch atomically and resolves temporary ids", () => {
     const engine = new GraphEngine();
     const project = engine.createMaterialProject("Test");

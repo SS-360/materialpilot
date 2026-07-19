@@ -9,6 +9,7 @@
 7. Call `project_validate` with `standard` or `strict`.
 
 The baseline workflow is structurally valid but artistically neutral. Use
-`preview_render_node_output` for a bounded PNG of an individual live node output, then judge the
-complete material in Material Maker's own 2D and 3D panels. Full panel capture and export remain
-capability-gated rather than pretending that graph validity proves visual quality.
+`preview_render_node_output` for a bounded PNG of an individual live node output or
+`preview_render_material_3d` for a sphere/plane material preview, then judge the complete material
+in Material Maker. `project_save` and `material_export_blender` require explicit approval and
+workspace-policy-approved paths; graph validity alone still does not prove visual quality.

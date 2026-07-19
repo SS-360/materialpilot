@@ -8,9 +8,11 @@ only by the current user. It is removed on clean shutdown.
 
 The current bridge implements authenticated status, multi-tab project inspection, rollback-safe
 and idempotent native material creation, raw graph snapshots, revision-checked patching, rollback,
-native undo/redo integration, and bounded in-memory PNG rendering for individual node outputs.
-Native project open/save/close, full 2D/3D panel capture, export, and painting mutation capabilities
-remain unavailable until their adapters have equivalent transaction and cancellation guarantees.
+native undo/redo integration, policy-mediated `.ptex` saves, bounded node-output and sphere/plane
+material previews, and verified Blender-profile exports. Graph comments and linked remote controls
+round-trip through the stable patch model. Native project open/close, additional export profiles,
+custom nodes, and painting mutations remain unavailable until their adapters have equivalent
+transaction and cancellation guarantees.
 
 See the [installation and run guide](../../docs/user/installation.md) for complete setup,
 verification, Codex MCP configuration, and live texture examples.

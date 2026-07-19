@@ -5,6 +5,7 @@ import {
   type PortDataType
 } from "@materialpilot/domain";
 import { builtinNodeDescriptors } from "./builtin.js";
+import generatedCatalog from "./generated.json" with { type: "json" };
 import {
   nodeTypeDescriptorSchema,
   type NodeTypeDescriptor,
@@ -23,7 +24,15 @@ export class NodeCatalog {
   readonly #descriptors: Map<string, NodeTypeDescriptor>;
   readonly version: string;
 
-  constructor(descriptors: readonly NodeTypeDescriptor[] = builtinNodeDescriptors) {
+  constructor(
+    descriptors: readonly NodeTypeDescriptor[] = [
+      ...builtinNodeDescriptors,
+      ...(generatedCatalog.descriptors as NodeTypeDescriptor[]).filter(
+        (generated) =>
+          !builtinNodeDescriptors.some((builtin) => builtin.nativeId === generated.nativeId)
+      )
+    ]
+  ) {
     const parsed = descriptors.map((descriptor) => nodeTypeDescriptorSchema.parse(descriptor));
     this.#descriptors = new Map(parsed.map((descriptor) => [descriptor.typeId, descriptor]));
     this.version = canonicalHash(

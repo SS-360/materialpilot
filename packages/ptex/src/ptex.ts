@@ -233,7 +233,28 @@ export function ptexToSnapshot(
           rawParameterToValue(value)
         ])
       ),
-      metadata: { rawType: raw.type, ...(raw.nodes ? { nestedGraph: raw.nodes } : {}) }
+      metadata: {
+        rawType: raw.type,
+        ...(raw.nodes ? { nestedGraph: raw.nodes } : {}),
+        ...(raw.type === "comment"
+          ? {
+              comment: {
+                title: typeof raw.title === "string" ? raw.title : "Comment",
+                text: typeof raw.text === "string" ? raw.text : "",
+                size:
+                  typeof raw.size === "object" && raw.size !== null
+                    ? {
+                        width: Number((raw.size as Record<string, unknown>).x ?? 420),
+                        height: Number((raw.size as Record<string, unknown>).y ?? 240)
+                      }
+                    : { width: 420, height: 240 }
+              }
+            }
+          : {}),
+        ...(raw.type === "remote" && Array.isArray(raw.widgets)
+          ? { remoteControls: structuredClone(raw.widgets) }
+          : {})
+      }
     };
   });
   const byNativeId = new Map(nodes.map((node) => [node.nativeId, node]));
@@ -293,6 +314,9 @@ export function snapshotToPtex(
         rawType = node.typeId.replace(/^mm\.unknown\./, "").replaceAll("-", "_");
       }
     }
+    const comment = node.metadata.comment as
+      { title?: unknown; text?: unknown; size?: { width?: unknown; height?: unknown } } | undefined;
+    const remoteControls = node.metadata.remoteControls;
     return {
       name: node.nativeId,
       type: rawType,
@@ -300,7 +324,18 @@ export function snapshotToPtex(
       parameters: Object.fromEntries(
         Object.entries(node.parameters).map(([name, value]) => [name, parameterValueToRaw(value)])
       ),
-      ...(node.seed === undefined ? {} : { seed_int: node.seed })
+      ...(node.seed === undefined ? {} : { seed_int: node.seed }),
+      ...(comment
+        ? {
+            title: String(comment.title ?? "Comment"),
+            text: String(comment.text ?? ""),
+            size: {
+              x: Number(comment.size?.width ?? 420),
+              y: Number(comment.size?.height ?? 240)
+            }
+          }
+        : {}),
+      ...(Array.isArray(remoteControls) ? { widgets: structuredClone(remoteControls) } : {})
     };
   });
   const byId = new Map(snapshot.nodes.map((node) => [node.id, node]));

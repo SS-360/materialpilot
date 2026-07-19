@@ -127,9 +127,11 @@ function validateNodeParameters(
   const descriptors = new Map(
     descriptor.parameters.map((parameter) => [parameter.name, parameter])
   );
+  const dynamicRemoteParameters = node.typeId === "mm.workflow.remote-controls";
   for (const [name, value] of Object.entries(node.parameters)) {
     const parameter = descriptors.get(name);
     if (!parameter) {
+      if (dynamicRemoteParameters) continue;
       diagnostics.push(
         diagnostic(
           snapshot,
@@ -343,7 +345,9 @@ export function validateGraph(
     for (const node of snapshot.nodes) validateNodeParameters(snapshot, node, catalog, diagnostics);
     const reachable = reachableFromOutputs(snapshot);
     for (const node of snapshot.nodes) {
-      if (!reachable.has(node.id)) {
+      const intentionalWorkflowNode =
+        node.typeId === "mm.workflow.comment" || node.typeId === "mm.workflow.remote-controls";
+      if (!reachable.has(node.id) && !intentionalWorkflowNode) {
         diagnostics.push(
           diagnostic(
             snapshot,

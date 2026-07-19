@@ -94,4 +94,53 @@ describe("PTEX adapter", () => {
       reverse.connections.map((connection) => connection.id).toSorted()
     );
   });
+
+  it("round-trips comment and remote-control workflow metadata", () => {
+    const project: RawPtexProject = {
+      name: "Documented workflow",
+      type: "graph",
+      nodes: [
+        {
+          name: "comment_0",
+          type: "comment",
+          title: "Sources",
+          text: "Tileable procedural sources.",
+          size: { x: 520, y: 280 }
+        },
+        {
+          name: "remote_0",
+          type: "remote",
+          widgets: [
+            {
+              name: "surface_scale",
+              label: "Surface scale",
+              linked_widgets: [{ node: "noise", widget: "scale_x" }]
+            }
+          ]
+        },
+        { name: "noise", type: "perlin" }
+      ],
+      connections: []
+    };
+
+    const snapshot = ptexToSnapshot(project, "mmpr_documented");
+    expect(snapshot.nodes.find((node) => node.nativeId === "comment_0")?.metadata).toHaveProperty(
+      "comment.title",
+      "Sources"
+    );
+    expect(snapshot.nodes.find((node) => node.nativeId === "remote_0")?.metadata).toHaveProperty(
+      "remoteControls.0.name",
+      "surface_scale"
+    );
+
+    const converted = snapshotToPtex(snapshot);
+    expect(converted.nodes.find((node) => node.name === "comment_0")).toMatchObject({
+      title: "Sources",
+      text: "Tileable procedural sources.",
+      size: { x: 520, y: 280 }
+    });
+    expect(converted.nodes.find((node) => node.name === "remote_0")?.widgets).toEqual(
+      project.nodes[1]?.widgets
+    );
+  });
 });

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { graphPatchSchema, type GraphOperation } from "@materialpilot/domain";
-import { PermissionPolicy } from "@materialpilot/security";
+import { PermissionPolicy, WorkspacePolicy } from "@materialpilot/security";
 import type { MaterialBackend } from "./backend.js";
 import { registerExpandedTools } from "./expanded-tools.js";
 
@@ -26,7 +26,8 @@ const editAnnotations = {
 export function registerTools(
   server: McpServer,
   backend: MaterialBackend,
-  policy: PermissionPolicy
+  policy: PermissionPolicy,
+  workspacePolicy: WorkspacePolicy
 ): void {
   server.registerTool(
     "app_get_status",
@@ -113,6 +114,63 @@ export function registerTools(
     async ({ projectId, profile }) => json(await backend.validate(projectId, profile))
   );
   server.registerTool(
+    "project_save",
+    {
+      description:
+        "Save the active editable Material Maker project to a policy-approved .ptex path.",
+      inputSchema: {
+        projectId: z.string().min(1),
+        path: z.string().min(1),
+        expectedRevision: z.number().int().nonnegative(),
+        idempotencyKey: z.string().min(8).max(200),
+        overwrite: z.boolean().default(false),
+        approvalToken: z.string().optional()
+      },
+      annotations: editAnnotations,
+      _meta: {
+        "materialpilot/safety": { approvalClass: "A2", sideEffects: ["writes project file"] }
+      }
+    },
+    async ({ projectId, path, expectedRevision, idempotencyKey, overwrite, approvalToken }) => {
+      policy.authorize("A2", approvalToken);
+      const authorized = workspacePolicy.authorize(path, "write", { overwrite });
+      return json(
+        await backend.saveProject(
+          projectId,
+          authorized,
+          expectedRevision,
+          idempotencyKey,
+          overwrite
+        )
+      );
+    }
+  );
+  server.registerTool(
+    "graph_create_named_snapshot",
+    {
+      description: "Capture the current canonical graph as an immutable named recovery snapshot.",
+      inputSchema: { projectId: z.string().min(1), name: z.string().min(1).max(120) },
+      annotations: editAnnotations,
+      _meta: {
+        "materialpilot/safety": { approvalClass: "A1", sideEffects: ["stores recovery snapshot"] }
+      }
+    },
+    async ({ projectId, name }) => {
+      policy.authorize("A1");
+      return json(await backend.createNamedSnapshot(projectId, name));
+    }
+  );
+  server.registerTool(
+    "graph_list_named_snapshots",
+    {
+      description: "List named recovery snapshots for one project.",
+      inputSchema: { projectId: z.string().min(1) },
+      annotations: readAnnotations,
+      _meta: { "materialpilot/safety": { approvalClass: "A0", sideEffects: [] } }
+    },
+    async ({ projectId }) => json(await backend.listNamedSnapshots(projectId))
+  );
+  server.registerTool(
     "preview_render_node_output",
     {
       description:
@@ -152,6 +210,79 @@ export function registerTools(
           }
         ]
       };
+    }
+  );
+  server.registerTool(
+    "preview_render_material_3d",
+    {
+      description:
+        "Render the live material on Material Maker's sphere or plane preview without writing a file.",
+      inputSchema: {
+        projectId: z.string().min(1),
+        geometry: z.enum(["sphere", "plane"]),
+        resolution: z.number().int().min(64).max(2048).default(1024)
+      },
+      annotations: readAnnotations,
+      _meta: {
+        "materialpilot/safety": {
+          approvalClass: "A0",
+          sideEffects: ["bounded transient GPU render"]
+        }
+      }
+    },
+    async ({ projectId, geometry, resolution }) => {
+      const preview = await backend.renderMaterialPreview(projectId, geometry, resolution);
+      return {
+        content: [
+          { type: "image" as const, data: preview.data, mimeType: preview.mimeType },
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                projectId,
+                geometry: preview.geometry,
+                revision: preview.revision,
+                width: preview.width,
+                height: preview.height
+              },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "material_export_blender",
+    {
+      description: "Export Blender-profile PBR textures and return verified artifact hashes.",
+      inputSchema: {
+        projectId: z.string().min(1),
+        prefix: z.string().min(1),
+        expectedRevision: z.number().int().nonnegative(),
+        idempotencyKey: z.string().min(8).max(200),
+        overwrite: z.boolean().default(false),
+        approvalToken: z.string().optional()
+      },
+      annotations: editAnnotations,
+      _meta: {
+        "materialpilot/safety": { approvalClass: "A3", sideEffects: ["writes exported textures"] }
+      }
+    },
+    async ({ projectId, prefix, expectedRevision, idempotencyKey, overwrite, approvalToken }) => {
+      policy.authorize("A3", approvalToken);
+      const authorized = workspacePolicy.authorize(`${prefix}.tres`, "export", { overwrite });
+      const normalizedPrefix = authorized.slice(0, -".tres".length);
+      return json(
+        await backend.exportBlender(
+          projectId,
+          normalizedPrefix,
+          expectedRevision,
+          idempotencyKey,
+          overwrite
+        )
+      );
     }
   );
   server.registerTool(

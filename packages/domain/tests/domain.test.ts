@@ -54,4 +54,44 @@ describe("domain primitives", () => {
       })
     ).toThrow();
   });
+
+  it("round-trips comment and remote-control node creation metadata", () => {
+    const parsed = graphPatchSchema.parse({
+      patchVersion: "1",
+      projectId: "mmpr_test",
+      expectedRevision: 0,
+      idempotencyKey: "documented-controls-round-trip",
+      label: "Document and expose controls",
+      dryRun: false,
+      validationPolicy: "structural",
+      operations: [
+        {
+          type: "node.create",
+          tempId: "comment",
+          nodeTypeId: "mm.workflow.comment",
+          position: { x: -100, y: -100 },
+          comment: {
+            title: "Surface controls",
+            text: "Artist-facing controls for the material.",
+            size: { width: 480, height: 260 }
+          }
+        },
+        {
+          type: "node.create",
+          nodeTypeId: "mm.workflow.remote-controls",
+          position: { x: -300, y: 0 },
+          remoteControls: [
+            {
+              name: "surface_scale",
+              label: "Surface scale",
+              description: "Controls the procedural source frequency.",
+              links: [{ nodeId: "noise", parameter: "scale_x" }]
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(graphPatchSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+  });
 });

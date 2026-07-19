@@ -5,6 +5,7 @@ const BRIDGE_VERSION := "0.1.0"
 const PORT_START := 39100
 const PORT_END := 39200
 const MAX_PAYLOAD_BYTES := 8 * 1024 * 1024
+const WEBSOCKET_BUFFER_BYTES := 12 * 1024 * 1024
 
 var _tcp_server := TCPServer.new()
 var _peers: Array[Dictionary] = []
@@ -39,6 +40,8 @@ func _process(_delta: float) -> void:
 	while _tcp_server.is_connection_available():
 		var stream := _tcp_server.take_connection()
 		var peer := WebSocketPeer.new()
+		peer.inbound_buffer_size = MAX_PAYLOAD_BYTES
+		peer.outbound_buffer_size = WEBSOCKET_BUFFER_BYTES
 		peer.accept_stream(stream)
 		_peers.append({"peer": peer, "authenticated": false})
 	for index in range(_peers.size() - 1, -1, -1):
@@ -101,7 +104,7 @@ func _handle_initialize(session: Dictionary, id, params: Dictionary) -> void:
 			"maxPatchOperations": 500,
 			"maxPayloadBytes": MAX_PAYLOAD_BYTES,
 			"maxConcurrentJobs": 2,
-			"maxPreviewResolution": 1024
+			"maxPreviewResolution": 2048
 		}
 	})
 
@@ -119,6 +122,8 @@ func _dispatch(method: String, params: Dictionary):
 			return _adapter.get_active_project()
 		"project.create_material":
 			return await _adapter.create_material_project(params)
+		"project.save":
+			return await _adapter.save_project(params)
 		"graph.get_snapshot":
 			return _adapter.get_graph_snapshot(params)
 		"graph.apply_patch":
@@ -129,6 +134,10 @@ func _dispatch(method: String, params: Dictionary):
 			return _adapter.redo(params)
 		"preview.render_node_output":
 			return await _adapter.render_node_output(params)
+		"preview.render_material_3d":
+			return await _adapter.render_material_3d(params)
+		"export.blender":
+			return await _adapter.export_blender(params)
 		_:
 			return MaterialPilotBridgeError.new(-32601, "Unknown bridge method: " + method)
 

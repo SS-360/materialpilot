@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PermissionPolicy } from "@materialpilot/security";
+import { PermissionPolicy, WorkspacePolicy } from "@materialpilot/security";
 import type { PermissionMode } from "@materialpilot/domain";
 import { InMemoryBackend, type MaterialBackend } from "./backend.js";
 import { registerPrompts } from "./prompts.js";
@@ -14,8 +14,15 @@ export function createMaterialPilotServer(
     permissionMode?: PermissionMode;
     customCodeEnabled?: boolean;
     networkEnabled?: boolean;
+    workspaceRoot?: string;
+    overwriteEnabled?: boolean;
   } = {}
-): { server: McpServer; backend: MaterialBackend; policy: PermissionPolicy } {
+): {
+  server: McpServer;
+  backend: MaterialBackend;
+  policy: PermissionPolicy;
+  workspacePolicy: WorkspacePolicy;
+} {
   const permissionMode = options.permissionMode ?? "assisted";
   const backend = options.backend ?? new InMemoryBackend({ permissionMode });
   const policy = new PermissionPolicy({
@@ -23,12 +30,20 @@ export function createMaterialPilotServer(
     customCodeEnabled: options.customCodeEnabled ?? false,
     networkEnabled: options.networkEnabled ?? false
   });
+  const workspaceRoot = options.workspaceRoot ?? process.cwd();
+  const workspacePolicy = new WorkspacePolicy({
+    readRoots: [workspaceRoot],
+    writeRoots: [workspaceRoot],
+    exportRoots: [workspaceRoot],
+    overwrite: options.overwriteEnabled ? "allow" : "deny",
+    allowedExtensions: [".ptex", ".png", ".exr", ".tres", ".md", ".json"]
+  });
   const server = new McpServer(
     { name: "materialpilot", version: "0.1.0" },
     { capabilities: { logging: {} }, instructions: serverInstructions }
   );
-  registerTools(server, backend, policy);
+  registerTools(server, backend, policy, workspacePolicy);
   registerResources(server, backend);
   registerPrompts(server);
-  return { server, backend, policy };
+  return { server, backend, policy, workspacePolicy };
 }

@@ -1,6 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InMemoryBackend } from "../src/backend.js";
 import { createMaterialPilotServer } from "../src/server.js";
 
@@ -17,10 +20,14 @@ describe("MaterialPilot MCP server", () => {
   it("lists coherent tools, resources, and prompts", async () => {
     const { client, server } = await connectedPair();
     const tools = await client.listTools();
-    expect(tools.tools).toHaveLength(138);
+    expect(tools.tools).toHaveLength(143);
     expect(tools.tools.map((tool) => tool.name)).toContain("graph_apply_patch");
     expect(tools.tools.map((tool) => tool.name)).toContain("workflow_create_material");
     expect(tools.tools.map((tool) => tool.name)).toContain("preview_render_node_output");
+    expect(tools.tools.map((tool) => tool.name)).toContain("preview_render_material_3d");
+    expect(tools.tools.map((tool) => tool.name)).toContain("graph_create_named_snapshot");
+    expect(tools.tools.map((tool) => tool.name)).toContain("project_save");
+    expect(tools.tools.map((tool) => tool.name)).toContain("material_export_blender");
     expect(tools.tools.map((tool) => tool.name)).toContain("workflow_create_cracked_stone");
     expect(tools.tools.map((tool) => tool.name)).toContain("material_connect_channel");
     expect(tools.tools.map((tool) => tool.name)).toContain("layout_grid");
@@ -33,6 +40,55 @@ describe("MaterialPilot MCP server", () => {
     ).toBe(true);
     expect((await client.listResources()).resources.length).toBeGreaterThan(3);
     expect((await client.listPrompts()).prompts.length).toBeGreaterThan(3);
+    await client.close();
+    await server.close();
+  });
+
+  it("creates immutable named recovery snapshots", async () => {
+    const { client, server, backend } = await connectedPair();
+    const project = await backend.createMaterialProject("Snapshot Test", "snapshot-project-key");
+    const created = await client.callTool({
+      name: "graph_create_named_snapshot",
+      arguments: { projectId: project.id, name: "Before industrial floor" }
+    });
+    expect(created.isError).not.toBe(true);
+    const listed = (await client.callTool({
+      name: "graph_list_named_snapshots",
+      arguments: { projectId: project.id }
+    })) as { content: Array<{ type: string; text?: string }> };
+    const text = listed.content[0]?.text;
+    expect(typeof text).toBe("string");
+    const snapshots = JSON.parse(text!) as Array<{ name: string; hash: string }>;
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.name).toBe("Before industrial floor");
+    expect(snapshots[0]?.hash).toHaveLength(64);
+    await client.close();
+    await server.close();
+  });
+
+  it("rejects project writes outside the configured workspace before reaching the backend", async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), "materialpilot-workspace-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const backend = new InMemoryBackend({ permissionMode: "workspace-autonomous" });
+    const { server } = createMaterialPilotServer({
+      backend,
+      permissionMode: "workspace-autonomous",
+      workspaceRoot
+    });
+    const client = new Client({ name: "materialpilot-test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const project = await backend.createMaterialProject("Path Test", "path-project-key");
+    const result = await client.callTool({
+      name: "project_save",
+      arguments: {
+        projectId: project.id,
+        path: join(workspaceRoot, "..", "escape.ptex"),
+        expectedRevision: 0,
+        idempotencyKey: "path-save-key",
+        overwrite: false
+      }
+    });
+    expect(result.isError).toBe(true);
     await client.close();
     await server.close();
   });
