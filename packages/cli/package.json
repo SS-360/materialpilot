@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "bin": {
     "materialpilot": "./dist/main.js"
   },
@@ -32,6 +35,6 @@
     "@materialpilot/ptex": "workspace:*",
     "@materialpilot/security": "workspace:*",
     "@materialpilot/validator": "workspace:*",
-    "commander": "^14.0.0"
+    "commander": "^15.0.0"
   }
 }

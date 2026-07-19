@@ -27,6 +27,10 @@ All notable changes use Keep a Changelog conventions.
 
 ### Fixed
 
+- Restored builds after the development-tool update by keeping TypeScript within
+  `typescript-eslint`'s supported 6.x range and explicitly loading Node type declarations, and
+  aligned the CLI, package metadata, CI minimum-version coverage, and installation guidance with
+  the Node.js 22.13.0 minimum required by the pnpm 11 toolchain and Commander 15.
 - Gated node previews, 3D material previews, and Blender export on the presence of a real Godot
   rendering device so headless sessions return `CAPABILITY_NOT_AVAILABLE` instead of invalid shader
   output or missing-material textures.

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { lintPtexText } from "../src/main.js";
+import { isSupportedNodeVersion, lintPtexText } from "../src/main.js";
 
 describe("CLI linter", () => {
   it("lints a PTEX fixture offline", () => {
@@ -22,5 +22,17 @@ describe("CLI linter", () => {
     const report = lintPtexText(readFileSync(path, "utf8"), "release");
     expect(report.valid).toBe(false);
     expect(report.diagnostics.map((entry) => entry.code)).toContain("UNRESOLVED_REFERENCES");
+  });
+});
+
+describe("CLI runtime checks", () => {
+  it.each([
+    ["22.12.0", false],
+    ["22.13.0", true],
+    ["v22.13.1", true],
+    ["23.0.0", true],
+    ["invalid", false]
+  ])("checks whether Node %s satisfies the supported runtime", (version, supported) => {
+    expect(isSupportedNodeVersion(version)).toBe(supported);
   });
 });

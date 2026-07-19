@@ -12,6 +12,21 @@ import { parsePtex, ptexToSnapshot } from "@materialpilot/ptex";
 import { validateGraph, type RunnableValidationProfile } from "@materialpilot/validator";
 
 const version = "0.1.0";
+const minimumNodeVersion = [22, 13, 0] as const;
+
+export function isSupportedNodeVersion(version: string): boolean {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+  if (!match) return false;
+  const actual = match.slice(1, 4).map(Number);
+  for (let index = 0; index < minimumNodeVersion.length; index += 1) {
+    const component = actual[index];
+    const minimum = minimumNodeVersion[index];
+    if (component === undefined || minimum === undefined) return false;
+    if (component > minimum) return true;
+    if (component < minimum) return false;
+  }
+  return true;
+}
 
 export function lintPtexText(
   text: string,
@@ -28,8 +43,11 @@ function defaultRuntimeFile(): string {
 
 async function doctor(json: boolean): Promise<number> {
   const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
-  const nodeMajor = Number(process.versions.node.split(".")[0]);
-  checks.push({ name: "Node.js", ok: nodeMajor >= 22, detail: process.versions.node });
+  checks.push({
+    name: "Node.js",
+    ok: isSupportedNodeVersion(process.versions.node),
+    detail: process.versions.node
+  });
   checks.push({ name: "Platform", ok: true, detail: `${process.platform} ${process.arch}` });
   try {
     await access(process.cwd(), constants.R_OK | constants.W_OK);
