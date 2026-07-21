@@ -440,6 +440,25 @@ See the [implementation status](docs/development/implementation-status.md) and
 [production implementation plan](materialpilot-production-implementation-plan.md) for the roadmap
 and stable `1.0` definition.
 
+## Built with Codex and GPT-5.6
+
+Codex powered by GPT-5.6 was used as the primary engineering collaborator throughout MaterialPilot’s development.
+
+It helped:
+
+- design the MCP server and native Godot bridge architecture;
+- implement typed tools, schemas, transactions, snapshots, and rollback;
+- inspect and organize Material Maker procedural graphs;
+- diagnose missing textures, bridge failures, and rendering problems;
+- create deterministic validation and automated tests;
+- build the Abandoned Industrial Floor demonstration workflow;
+- verify Blender exports, previews, hashes, and generated artifacts;
+- review the repository, documentation, security boundaries, and release readiness.
+
+The human developer directed the product vision, made architectural and creative decisions, tested the integration inside Material Maker, reviewed generated changes, and validated the final user experience.
+
+Codex was used as a collaborative engineering agent—not simply as a code generator. It inspected the existing system, proposed changes, edited the repository, ran tests, diagnosed failures, and iterated based on real application results.
+
 ## Documentation
 
 - [Installation and run guide](docs/user/installation.md)
