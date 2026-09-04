@@ -23,6 +23,6 @@
   "dependencies": {
     "@materialpilot/domain": "workspace:*",
     "@materialpilot/node-catalog": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   }
 }
